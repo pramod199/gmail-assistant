@@ -1,0 +1,5 @@
+google-auth>=2.15.0
+google-api-python-client>=2.100.0
+google-generativeai>=0.8.0
+pydantic>=2.5.0
+typing-extensions>=4.8.0
