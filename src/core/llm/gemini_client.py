@@ -51,15 +51,31 @@ class GeminiClient:
         Extract:
         1. INTENT: READ, SUMMARIZE, MARK_READ, or DRAFT
         2. EMAIL COUNT: How many emails (number or {DEFAULT_EMAIL_LIMIT} if not specified)
-        3. DISPLAY FORMAT: FULL or PREVIEW (default)
+        3. DISPLAY FORMAT: FULL or PREVIEW (default: PREVIEW)
         4. GMAIL QUERY: Convert to Gmail search syntax, some query example: in:inbox is:unread, in:important is:read , is:starred , is:important (default: {DEFAULT_QUERY})
+        5. NAVIGATION: Simple navigation detection
+           - "next" for "next message", "next email"
+           - "previous" for "previous message", "prev email"
+           - "none" for everything else
+        6. TOKEN: Extract pageToken if user provides one
+           - Look for "with token", "token:", "page token" followed by alphanumeric string
+           - Examples: "next with token abc123", "token: xyz456"
+           - If no token found, return null
+
+        Navigation examples:
+        - "read my next message" → navigation: "next", token: null
+        - "next with token abc123" → navigation: "next", token: "abc123"
+        - "show me previous email" → navigation: "previous", token: null
+        - "read my emails" → navigation: "none", token: null
 
         Respond exactly as a valid JSON object:
         {{
         "intent": "[intent]",
         "limit": [number],
         "display": "[format]",
-        "gmail_query": "[gmail search query]"
+        "gmail_query": "[gmail search query]",
+        "navigation": "[next|previous|none]",
+        "token": "[extracted_token_or_null]"
         }}
 
         """
@@ -128,7 +144,9 @@ class GeminiClient:
             "intent": "READ",
             "gmail_query": DEFAULT_QUERY,
             "limit": DEFAULT_EMAIL_LIMIT,
-            "display": "PREVIEW"
+            "display": "PREVIEW",
+            "navigation": "none",
+            "token": None
         }
         
         try:
@@ -160,6 +178,12 @@ class GeminiClient:
                 
                 if "display" in parsed and parsed["display"] in ["FULL", "PREVIEW"]:
                     result["display"] = parsed["display"]
+                
+                if "navigation" in parsed and parsed["navigation"] in ["next", "previous", "none"]:
+                    result["navigation"] = parsed["navigation"]
+                
+                if "token" in parsed and parsed["token"]:
+                    result["token"] = parsed["token"]
                 
                 return result
                 

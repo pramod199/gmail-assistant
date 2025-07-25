@@ -6,7 +6,7 @@ GEMINI_TEMPERATURE = 1
 GEMINI_MAX_TOKENS = 1000
 
 # Gmail Configuration
-DEFAULT_EMAIL_LIMIT = 10
+DEFAULT_EMAIL_LIMIT = 1
 MAX_EMAIL_LIMIT = 20
 
 # Message Display Configuration
@@ -15,7 +15,7 @@ FULL_MESSAGE_KEYWORDS = ["full", "complete", "entire", "whole", "all"]
 PREVIEW_KEYWORDS = ["preview", "snippet", "brief", "short"]
 
 # Gmail Search Configuration
-DEFAULT_QUERY = "is:unread"
+DEFAULT_QUERY = "is:unread -category:promotions -category:social"
 
 # Application Configuration
 APP_NAME = "Gmail Assistant"

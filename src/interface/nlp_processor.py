@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 from ..core.llm.gemini_client import GeminiClient
 from ..core.filters.filter_engine import FilterEngine
 from ..core.gmail_client.gmail_service import GmailService
+from ..core.navigation.navigation_manager import NavigationManager
 from config.settings import DEFAULT_EMAIL_LIMIT, MAX_EMAIL_LIMIT
 
 
@@ -10,8 +11,15 @@ class NLPProcessor:
         self.gmail_service = gmail_service
         self.gemini_client = gemini_client
         self.filter_engine = FilterEngine()
+        self.navigation_managers = {}  # user_id -> NavigationManager
     
-    def process_user_request(self, user_input: str) -> Dict[str, Any]:
+    def get_navigation_manager(self, user_id: str = "default") -> NavigationManager:
+        """Get or create NavigationManager for specific user"""
+        if user_id not in self.navigation_managers:
+            self.navigation_managers[user_id] = NavigationManager()
+        return self.navigation_managers[user_id]
+    
+    def process_user_request(self, user_input: str, user_id: str = "default") -> Dict[str, Any]:
         print("Analyzing request with Gemini...")
         intent_data = self.gemini_client.classify_intent(user_input)
         print(f"Intent data from gemini: {intent_data}")
@@ -19,25 +27,82 @@ class NLPProcessor:
         intent = intent_data.get("intent", "READ")
         
         if intent == "READ":
-            return self._handle_read_request(intent_data)
+            return self._handle_read_request(intent_data, user_id)
         elif intent == "SUMMARIZE":
-            return self._handle_summarize_request(user_input, intent_data)
+            return self._handle_summarize_request(user_input, intent_data, user_id)
         elif intent == "MARK_READ":
-            return self._handle_mark_read_request(user_input, intent_data)
+            return self._handle_mark_read_request(user_input, intent_data, user_id)
         elif intent == "DRAFT":
-            return self._handle_draft_request(user_input, intent_data)
+            return self._handle_draft_request(user_input, intent_data, user_id)
         else:
             print("intent is not clear so falling back to default read intent")
-            return self._handle_read_request(intent_data)  # Default fallback
+            return self._handle_read_request(intent_data, user_id)  # Default fallback
     
-    def _handle_read_request(self, intent_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_read_request(self, intent_data: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
         query = intent_data.get("gmail_query", "is:unread")
         limit = intent_data.get("limit", DEFAULT_EMAIL_LIMIT)
         display_format = intent_data.get("display", "PREVIEW")
+        navigation = intent_data.get("navigation", "none")
         
-        print(f"Searching Gmail with query: '{query}', limit: {limit}")
-        messages = self.gmail_service.search_messages(query, limit)
+        navigation_manager = self.get_navigation_manager(user_id)
+        print(f"[DEBUG] User {user_id} - Navigation command: '{navigation}', Navigation state: {navigation_manager.get_navigation_info()}")
+        
+        # Handle navigation commands
+        if navigation == "next":
+            page_token = navigation_manager.navigate_next()
+            if page_token is None:
+                return {
+                    "action": "read",
+                    "messages": [],
+                    "count": 0,
+                    "response": "No next page available. Please start a new search first."
+                }
+        elif navigation == "previous":
+            page_token = navigation_manager.navigate_previous()
+            print(f"[DEBUG] User {user_id} - Previous navigation returned token: {page_token}")
+            if page_token is None:
+                return {
+                    "action": "read",
+                    "messages": [],
+                    "count": 0,
+                    "response": "Already at the first page."
+                }
+        else:
+            # Check if this is actually a new search (different query) or just a parsing issue
+            current_query = getattr(navigation_manager, 'current_query', '')
+            if query != current_query:
+                # Truly new search - reset navigation
+                navigation_manager.start_new_search(query, limit)
+                page_token = None
+            else:
+                # Same query, might be navigation that wasn't parsed correctly
+                # Keep existing navigation state and use current page token
+                page_token = navigation_manager.get_current_page_token()
+        
+        print(f"Searching Gmail with query: '{query}', limit: {limit}, token: {page_token}")
+        result = self.gmail_service.search_messages(query, limit, page_token)
+        messages = result["messages"]
         print(f"Found {len(messages)} messages")
+        
+        if not messages:
+            return {
+                "action": "read",
+                "messages": [],
+                "count": 0,
+                "response": "No messages found."
+            }
+        
+        # Get next page token and store it for future navigation
+        next_page_token = result.get("next_page_token")
+        # Only update the next token after navigation or new searches
+        navigation_manager.set_next_page_token(next_page_token)
+        
+        response_text = self._format_messages_response(messages, display_format)
+        
+        # Add navigation commands
+        navigation_commands = navigation_manager.get_navigation_commands()
+        if navigation_commands:
+            response_text += f"\n\n📄 Navigation: {' | '.join(navigation_commands)}"
         
         return {
             "action": "read",
@@ -45,15 +110,18 @@ class NLPProcessor:
             "count": len(messages),
             "query_used": query,
             "display_format": display_format,
-            "response": self._format_messages_response(messages, display_format)
+            "navigation": navigation,
+            "next_page_token": next_page_token,
+            "response": response_text
         }
     
-    def _handle_summarize_request(self, user_input: str, intent_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_summarize_request(self, user_input: str, intent_data: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
         query = intent_data.get("gmail_query", "is:unread")
         limit = intent_data.get("limit", DEFAULT_EMAIL_LIMIT)
         
         print(f"Searching Gmail for summary with query: '{query}', limit: {limit}")
-        messages = self.gmail_service.search_messages(query, limit)
+        result = self.gmail_service.search_messages(query, limit)
+        messages = result["messages"]
         print(f"Found {len(messages)} messages, generating summary...")
         summary = self.gemini_client.summarize_emails(messages)
         
@@ -66,11 +134,12 @@ class NLPProcessor:
             "response": f"Summary of {len(messages)} messages:\n\n{summary}"
         }
     
-    def _handle_mark_read_request(self, user_input: str, intent_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_mark_read_request(self, user_input: str, intent_data: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
         query = self.filter_engine.natural_language_to_query(user_input)
         limit = self._extract_limit(intent_data)
         
-        messages = self.gmail_service.search_messages(query, limit)
+        result = self.gmail_service.search_messages(query, limit)
+        messages = result["messages"]
         message_ids = [msg["id"] for msg in messages]
         
         if message_ids:
@@ -90,7 +159,7 @@ class NLPProcessor:
             "response": response
         }
     
-    def _handle_draft_request(self, user_input: str, intent_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_draft_request(self, user_input: str, intent_data: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
         # For now, assume user wants to reply to the latest unread message
         messages = self.gmail_service.search_messages("is:unread", 1)
         
