@@ -65,10 +65,10 @@ class GmailAssistant:
                     continue
                 
                 print("Processing your request...")
-                result = self.nlp_processor.process_user_request(user_input)
+                result = self.nlp_processor.process_user_request(user_input, "me")
                 
                 print("\n" + "="*50)
-                print(f"full response {result}")
+                # print(f"full response {result}")
                 print("\n result" + "="*50)
                 print(result.get("response", "No response generated"))
                 print("="*50 + "\n")

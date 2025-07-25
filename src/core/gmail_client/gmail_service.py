@@ -31,17 +31,22 @@ class GmailService:
             print(f"Unexpected error: {error}")
             return False
     
-    def search_messages(self, query: str = "is:unread", max_results: int = 10) -> List[Dict[str, Any]]:
+    def search_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
         try:
             print("GMAIL API CALL - List Messages")
             print(f"Request query: '{query}', max_results: {max_results}")
             
             service = self.get_service()
-            result = service.users().messages().list(
-                userId="me",
-                q=query,
-                maxResults=max_results
-            ).execute()
+            request_params = {
+                "userId": "me",  # TODO: Replace with actual user_id for multi-user service
+                "q": query,
+                "maxResults": max_results
+            }
+            
+            if page_token:
+                request_params["pageToken"] = page_token
+                
+            result = service.users().messages().list(**request_params).execute()
             
             messages = result.get("messages", [])
             print(f"GMAIL RESPONSE: Found {len(messages)} message IDs")
@@ -55,14 +60,20 @@ class GmailService:
                     detailed_messages.append(details)
             
             print(f"Retrieved {len(detailed_messages)} complete messages")
-            return detailed_messages
+            
+            # Return both messages and pagination info
+            return {
+                "messages": detailed_messages,
+                "next_page_token": result.get("nextPageToken"),
+                "result_size_estimate": result.get("resultSizeEstimate", len(detailed_messages))
+            }
             
         except HttpError as error:
             print(f"ERROR GMAIL API: {error}")
-            return []
+            return {"messages": [], "next_page_token": None, "result_size_estimate": 0}
         except Exception as error:
             print(f"ERROR Unexpected: {error}")
-            return []
+            return {"messages": [], "next_page_token": None, "result_size_estimate": 0}
     
     def get_message_details(self, message_id: str) -> Optional[Dict[str, Any]]:
         try:
