@@ -1,72 +1,156 @@
 from typing import List, Optional, Dict, Any
+import json
+import redis
+from ...config.settings import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD, NAVIGATION_KEY_PREFIX, NAVIGATION_TTL
 
 
 class NavigationManager:
-    def __init__(self, max_history: int = 5):
-        self.token_stack: List[Optional[str]] = [None]  # [None, token1, token2, ...] - None for first page
-        self.current_index: int = 0  # Current position in stack
-        self.max_history: int = max_history  # Limit memory usage
-        self.current_query: str = ""
-        self.current_limit: int = 10
+    def __init__(self, max_history: int = 5, user_id: str = "default"):
+        if not user_id or user_id.strip() == "":
+            raise ValueError("user_id cannot be empty")
+        
+        self.max_history = max_history
+        self.user_id = user_id.strip()
+        # Use more explicit key format for better isolation
+        self.redis_key = f"{NAVIGATION_KEY_PREFIX}:{self.user_id}"
+        
+        print(f"[NavigationManager] Initializing for user: {self.user_id}")
+        print(f"[NavigationManager] Redis key: {self.redis_key}")
+        
+        # Connect to Redis - fail if unavailable
+        try:
+            self.redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                db=REDIS_DB,
+                password=REDIS_PASSWORD,
+                decode_responses=True
+            )
+            # Test connection
+            self.redis_client.ping()
+            print(f"[NavigationManager] Connected to Redis for user {user_id}")
+        except Exception as e:
+            print(f"[NavigationManager] FATAL: Cannot connect to Redis: {e}")
+            raise ConnectionError(f"Redis connection failed: {e}") from e
+    
+    def _get_state(self) -> Dict[str, Any]:
+        """Get navigation state from Redis"""
+        try:
+            data = self.redis_client.get(self.redis_key)
+            if data:
+                return json.loads(data)
+            else:
+                # Default state
+                return {
+                    "token_stack": [None],
+                    "current_index": 0,
+                    "current_query": "",
+                    "current_limit": 10,
+                    "next_available_token": None
+                }
+        except Exception as e:
+            print(f"[NavigationManager] Error reading from Redis: {e}")
+            raise
+    
+    def _save_state(self, state: Dict[str, Any]):
+        """Save navigation state to Redis"""
+        try:
+            self.redis_client.setex(
+                self.redis_key,
+                NAVIGATION_TTL,
+                json.dumps(state)
+            )
+        except Exception as e:
+            print(f"[NavigationManager] Error saving to Redis: {e}")
+            raise
     
     def start_new_search(self, query: str, limit: int):
         """Start a new search, reset navigation"""
-        self.token_stack = [None]  # First page has no token
-        self.current_index = 0
-        self.current_query = query
-        self.current_limit = limit
+        state = {
+            "token_stack": [None],
+            "current_index": 0,
+            "current_query": query,
+            "current_limit": limit,
+            "next_available_token": None
+        }
+        self._save_state(state)
     
     def set_next_page_token(self, next_page_token: Optional[str]):
         """Store the next page token from search results"""
-        self.next_available_token = next_page_token
+        state = self._get_state()
+        state["next_available_token"] = next_page_token
+        self._save_state(state)
     
     def navigate_next(self) -> Optional[str]:
         """Navigate to next page using stored token"""
-        if not hasattr(self, 'next_available_token') or self.next_available_token is None:
+        state = self._get_state()
+        
+        if not state.get("next_available_token"):
             return None  # No next page available
         
-        next_page_token = self.next_available_token
+        next_page_token = state["next_available_token"]
+        token_stack = state["token_stack"]
+        current_index = state["current_index"]
         
         # If we're not at the end of stack, just move forward
-        if self.current_index + 1 < len(self.token_stack):
-            self.current_index += 1
-            return self.token_stack[self.current_index]
+        if current_index + 1 < len(token_stack):
+            current_index += 1
+            state["current_index"] = current_index
+            self._save_state(state)
+            return token_stack[current_index]
         
         # Add new page to stack
-        self.token_stack.append(next_page_token)
+        token_stack.append(next_page_token)
         
         # Trim stack if too large (keep most recent pages)
-        if len(self.token_stack) > self.max_history:
-            self.token_stack.pop(0)  # Remove oldest page
-            self.current_index = len(self.token_stack) - 1
+        if len(token_stack) > self.max_history:
+            token_stack.pop(0)  # Remove oldest page
+            current_index = len(token_stack) - 1
         else:
-            self.current_index += 1
+            current_index += 1
         
-        return self.token_stack[self.current_index]
+        state["token_stack"] = token_stack
+        state["current_index"] = current_index
+        self._save_state(state)
+        
+        return token_stack[current_index]
     
     def navigate_previous(self) -> Optional[str]:
         """Navigate to previous page"""
-        if self.current_index <= 0:
+        state = self._get_state()
+        current_index = state["current_index"]
+        token_stack = state["token_stack"]
+        
+        if current_index <= 0:
             return None  # Already at first page
         
-        self.current_index -= 1
-        return self.token_stack[self.current_index]
+        current_index -= 1
+        state["current_index"] = current_index
+        self._save_state(state)
+        
+        return token_stack[current_index]
     
     def get_current_page_token(self) -> Optional[str]:
         """Get current page token"""
-        if 0 <= self.current_index < len(self.token_stack):
-            return self.token_stack[self.current_index]
+        state = self._get_state()
+        current_index = state["current_index"]
+        token_stack = state["token_stack"]
+        
+        if 0 <= current_index < len(token_stack):
+            return token_stack[current_index]
         return None
     
     def can_go_next(self) -> bool:
         """Check if next navigation is possible"""
-        # Can go next if we have a stored next token OR if we're not at end of our stack
-        has_next_token = hasattr(self, 'next_available_token') and self.next_available_token is not None
-        return has_next_token or (self.current_index + 1 < len(self.token_stack))
+        state = self._get_state()
+        has_next_token = state.get("next_available_token") is not None
+        at_end_of_stack = state["current_index"] + 1 >= len(state["token_stack"])
+        return has_next_token or not at_end_of_stack
     
     def can_go_previous(self) -> bool:
         """Check if previous navigation is possible"""
-        return self.current_index > 0
+        state = self._get_state()
+        return state["current_index"] > 0
     
     def get_navigation_commands(self) -> List[str]:
         """Generate navigation command strings for user"""
@@ -82,10 +166,21 @@ class NavigationManager:
     
     def get_navigation_info(self) -> Dict[str, Any]:
         """Get current navigation state for debugging"""
+        state = self._get_state()
         return {
-            "current_page": self.current_index + 1,
-            "stack_size": len(self.token_stack),
+            "current_page": state["current_index"] + 1,
+            "stack_size": len(state["token_stack"]),
             "can_go_previous": self.can_go_previous(),
             "current_token": self.get_current_page_token(),
-            "query": self.current_query
+            "query": state["current_query"]
         }
+    
+    def clear_user_data(self):
+        """Clear all navigation data for this user (useful for testing/logout)"""
+        try:
+            result = self.redis_client.delete(self.redis_key)
+            print(f"[NavigationManager] Cleared data for user {self.user_id}: {result} keys deleted")
+            return result > 0
+        except Exception as e:
+            print(f"[NavigationManager] Error clearing data: {e}")
+            return False

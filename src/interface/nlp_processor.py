@@ -16,7 +16,7 @@ class NLPProcessor:
     def get_navigation_manager(self, user_id: str = "default") -> NavigationManager:
         """Get or create NavigationManager for specific user"""
         if user_id not in self.navigation_managers:
-            self.navigation_managers[user_id] = NavigationManager()
+            self.navigation_managers[user_id] = NavigationManager(user_id=user_id)
         return self.navigation_managers[user_id]
     
     def process_user_request(self, user_input: str, user_id: str = "default") -> Dict[str, Any]:
@@ -69,7 +69,8 @@ class NLPProcessor:
                 }
         else:
             # Check if this is actually a new search (different query) or just a parsing issue
-            current_query = getattr(navigation_manager, 'current_query', '')
+            current_state = navigation_manager._get_state()
+            current_query = current_state.get('current_query', '')
             if query != current_query:
                 # Truly new search - reset navigation
                 navigation_manager.start_new_search(query, limit)
