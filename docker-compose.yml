@@ -1,0 +1,44 @@
+version: '3.8'
+
+networks:
+  redis-network:
+    driver: bridge
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: gmail-assistant-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - redis-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    container_name: gmail-assistant-redis-insight
+    ports:
+      - "5540:5540"
+    volumes:
+      - redis_insight_data:/db
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - redis-network
+    command: sh -c "until nc -z redis 6379; do echo 'Waiting for Redis...'; sleep 2; done; echo 'Redis is ready!'; /usr/local/bin/docker-entrypoint.sh"
+
+volumes:
+  redis_data:
+    driver: local
+  redis_insight_data:
+    driver: local

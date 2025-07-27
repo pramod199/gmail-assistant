@@ -65,7 +65,10 @@ class GmailAssistant:
                     continue
                 
                 print("Processing your request...")
-                result = self.nlp_processor.process_user_request(user_input, "me")
+                # For Gmail API, use "me" as user identifier
+                # In multi-user setup, this would be actual user email/ID from authentication
+                user_id = "me"
+                result = self.nlp_processor.process_user_request(user_input, user_id)
                 
                 print("\n" + "="*50)
                 # print(f"full response {result}")

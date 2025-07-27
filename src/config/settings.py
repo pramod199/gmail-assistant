@@ -20,3 +20,12 @@ DEFAULT_QUERY = "is:unread -category:promotions -category:social"
 # Application Configuration
 APP_NAME = "Gmail Assistant"
 APP_VERSION = "1.0.0"
+
+# Redis Configuration
+import os
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+NAVIGATION_KEY_PREFIX = "gmail_assistant:navigation"
+NAVIGATION_TTL = 7 * 24 * 3600  # 7 days in seconds
