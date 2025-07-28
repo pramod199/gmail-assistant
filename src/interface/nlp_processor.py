@@ -162,7 +162,8 @@ class NLPProcessor:
     
     def _handle_draft_request(self, user_input: str, intent_data: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
         # For now, assume user wants to reply to the latest unread message
-        messages = self.gmail_service.search_messages("is:unread", 1)
+        result = self.gmail_service.search_messages("is:unread", 1)
+        messages = result["messages"]
         
         if not messages:
             return {
