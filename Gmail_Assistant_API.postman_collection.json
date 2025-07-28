@@ -1,0 +1,445 @@
+{
+	"info": {
+		"_postman_id": "gmail-assistant-api",
+		"name": "Gmail Assistant API",
+		"description": "Complete API collection for Gmail Assistant with Firebase authentication",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{firebase_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "firebase_token",
+			"value": "your_firebase_id_token_here",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Public Endpoints",
+			"item": [
+				{
+					"name": "API Root",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/",
+							"host": ["{{base_url}}"],
+							"path": [""]
+						}
+					}
+				},
+				{
+					"name": "Health Check",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Check Gmail Auth Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/gmail/status",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "gmail", "status"]
+						}
+					}
+				},
+				{
+					"name": "Start Gmail OAuth",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/gmail/authorize",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "gmail", "authorize"]
+						}
+					}
+				},
+				{
+					"name": "Revoke Gmail Access",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/gmail/revoke",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "gmail", "revoke"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Gmail Operations",
+			"item": [
+				{
+					"name": "Process Natural Language Request",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"Show me my unread emails\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/gmail/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "process"]
+						}
+					}
+				},
+				{
+					"name": "Get Messages",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/gmail/messages?max_results=10&query=is:unread",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "messages"],
+							"query": [
+								{
+									"key": "max_results",
+									"value": "10"
+								},
+								{
+									"key": "query",
+									"value": "is:unread"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Specific Message",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/gmail/messages/{{message_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "messages", "{{message_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Mark Message as Read",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/gmail/messages/{{message_id}}/mark-read",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "messages", "{{message_id}}", "mark-read"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Draft Management",
+			"item": [
+				{
+					"name": "Create Draft",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"to\": \"recipient@example.com\",\n    \"subject\": \"Test Draft\",\n    \"body\": \"This is a test draft created via API.\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/gmail/drafts",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "drafts"]
+						}
+					}
+				},
+				{
+					"name": "Get All Drafts",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/gmail/drafts?max_results=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "drafts"],
+							"query": [
+								{
+									"key": "max_results",
+									"value": "10"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Draft Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/gmail/drafts/{{draft_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "drafts", "{{draft_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Send Draft",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/gmail/drafts/{{draft_id}}/send",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "drafts", "{{draft_id}}", "send"]
+						}
+					}
+				},
+				{
+					"name": "Delete Draft",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/gmail/drafts/{{draft_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "drafts", "{{draft_id}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Natural Language Examples",
+			"item": [
+				{
+					"name": "Summarize Important Messages",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"Summarize my important messages from today\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/gmail/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "process"]
+						}
+					}
+				},
+				{
+					"name": "Mark Last 3 Emails as Read",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"Mark the last 3 emails as read\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/gmail/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "process"]
+						}
+					}
+				},
+				{
+					"name": "Draft Reply to Latest Email",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"Draft a reply to the latest email saying I'll review it tomorrow\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/gmail/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "process"]
+						}
+					}
+				},
+				{
+					"name": "Show Emails from Specific Sender",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{firebase_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"Show me emails from john@example.com\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/gmail/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "gmail", "process"]
+						}
+					}
+				}
+			]
+		}
+	]
+}

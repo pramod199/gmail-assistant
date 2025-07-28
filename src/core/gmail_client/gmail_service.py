@@ -31,6 +31,19 @@ class GmailService:
             print(f"Unexpected error: {error}")
             return False
     
+    def get_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> List[Dict[str, Any]]:
+        """
+        Convenience method for API controllers - returns just the message list
+        """
+        result = self.search_messages(query, max_results, page_token)
+        return result.get("messages", [])
+    
+    def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Convenience method for API controllers - get single message by ID
+        """
+        return self.get_message_details(message_id)
+    
     def search_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
         try:
             print("GMAIL API CALL - List Messages")
@@ -144,6 +157,104 @@ class GmailService:
         except Exception as error:
             print(f"Unexpected error: {error}")
             return None
+    
+    def get_drafts(self, max_results: int = 10) -> List[Dict[str, Any]]:
+        """Get user's drafts"""
+        try:
+            service = self.get_service()
+            
+            # List drafts
+            results = service.users().drafts().list(
+                userId="me",
+                maxResults=max_results
+            ).execute()
+            
+            drafts = results.get("drafts", [])
+            detailed_drafts = []
+            
+            for draft in drafts:
+                draft_detail = self.get_draft_by_id(draft["id"])
+                if draft_detail:
+                    detailed_drafts.append(draft_detail)
+            
+            return detailed_drafts
+            
+        except HttpError as error:
+            print(f"Error getting drafts: {error}")
+            return []
+        except Exception as error:
+            print(f"Unexpected error: {error}")
+            return []
+    
+    def get_draft_by_id(self, draft_id: str) -> Optional[Dict[str, Any]]:
+        """Get draft by ID"""
+        try:
+            service = self.get_service()
+            
+            draft = service.users().drafts().get(
+                userId="me",
+                id=draft_id
+            ).execute()
+            
+            # Parse the draft message
+            message = draft.get("message", {})
+            parsed = self._parse_message(message)
+            
+            # Add draft-specific info
+            parsed["draft_id"] = draft.get("id")
+            parsed["is_draft"] = True
+            
+            # Also include raw headers for easier access
+            payload = message.get("payload", {})
+            headers = payload.get("headers", [])
+            parsed["headers"] = headers
+            
+            return parsed
+            
+        except HttpError as error:
+            print(f"Error getting draft: {error}")
+            return None
+        except Exception as error:
+            print(f"Unexpected error: {error}")
+            return None
+    
+    def send_draft(self, draft_id: str) -> bool:
+        """Send a draft"""
+        try:
+            service = self.get_service()
+            
+            service.users().drafts().send(
+                userId="me",
+                body={"id": draft_id}
+            ).execute()
+            
+            return True
+            
+        except HttpError as error:
+            print(f"Error sending draft: {error}")
+            return False
+        except Exception as error:
+            print(f"Unexpected error: {error}")
+            return False
+    
+    def delete_draft(self, draft_id: str) -> bool:
+        """Delete a draft"""
+        try:
+            service = self.get_service()
+            
+            service.users().drafts().delete(
+                userId="me",
+                id=draft_id
+            ).execute()
+            
+            return True
+            
+        except HttpError as error:
+            print(f"Error deleting draft: {error}")
+            return False
+        except Exception as error:
+            print(f"Unexpected error: {error}")
+            return False
     
     def _parse_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         headers = message.get("payload", {}).get("headers", [])
