@@ -46,7 +46,8 @@ class NavigationManager:
                     "current_index": 0,
                     "current_query": "",
                     "current_limit": 10,
-                    "next_available_token": None
+                    "next_available_token": None,
+                    "recent_messages": []
                 }
         except Exception as e:
             print(f"[NavigationManager] Error reading from Redis: {e}")
@@ -71,7 +72,8 @@ class NavigationManager:
             "current_index": 0,
             "current_query": query,
             "current_limit": limit,
-            "next_available_token": None
+            "next_available_token": None,
+            "recent_messages": []
         }
         self._save_state(state)
     
@@ -174,6 +176,56 @@ class NavigationManager:
             "current_token": self.get_current_page_token(),
             "query": state["current_query"]
         }
+    
+    def store_recent_messages(self, messages: List[Dict[str, Any]], max_messages: int = 10):
+        """Store recent messages for draft context"""
+        state = self._get_state()
+        
+        # Add new messages to the beginning (most recent first)
+        recent_messages = messages + state.get("recent_messages", [])
+        
+        # Keep only the most recent max_messages
+        state["recent_messages"] = recent_messages[:max_messages]
+        
+        self._save_state(state)
+        print(f"[NavigationManager] Stored {len(messages)} messages, total recent: {len(state['recent_messages'])}")
+    
+    def get_recent_messages(self) -> List[Dict[str, Any]]:
+        """Get recently read messages"""
+        state = self._get_state()
+        return state.get("recent_messages", [])
+    
+    def find_message_by_reference(self, reference: str) -> Optional[Dict[str, Any]]:
+        """Find message by reference like 'this', 'last', 'from john', etc."""
+        recent_messages = self.get_recent_messages()
+        
+        if not recent_messages:
+            return None
+        
+        reference_lower = reference.lower().strip()
+        
+        # Handle "this" or "last" - return most recent message
+        if reference_lower in ["this", "last", "latest"]:
+            return recent_messages[0]
+        
+        # Handle "from [sender]" - search by sender
+        if reference_lower.startswith("from "):
+            sender_name = reference_lower[5:].strip()
+            for msg in recent_messages:
+                sender = msg.get("sender", "").lower()
+                if sender_name in sender:
+                    return msg
+        
+        # Handle "about [subject]" - search by subject
+        if reference_lower.startswith("about "):
+            subject_keywords = reference_lower[6:].strip()
+            for msg in recent_messages:
+                subject = msg.get("subject", "").lower()
+                if subject_keywords in subject:
+                    return msg
+        
+        # Default to most recent message if reference is unclear
+        return recent_messages[0]
     
     def clear_user_data(self):
         """Clear all navigation data for this user (useful for testing/logout)"""

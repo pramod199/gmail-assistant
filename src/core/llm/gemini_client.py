@@ -61,12 +61,26 @@ class GeminiClient:
            - Look for "with token", "token:", "page token" followed by alphanumeric string
            - Examples: "next with token abc123", "token: xyz456"
            - If no token found, return null
+        7. MESSAGE_REFERENCE: For DRAFT intent only - extract which message to reply to
+           - "this message", "this", "last message", "latest" → "this"
+           - "from john", "from [name]" → "from [name]"
+           - "about meeting", "about [topic]" → "about [topic]"
+           - Default: "this"
+        8. CUSTOM_BODY: For DRAFT intent only - extract any custom message content provided by user
+           - Look for phrases like "tell them...", "say...", "write...", custom content after "reply with"
+           - Extract the actual message content the user wants to include
+           - If no custom content found, return empty string
 
         Navigation examples:
         - "read my next message" → navigation: "next", token: null
         - "next with token abc123" → navigation: "next", token: "abc123"
         - "show me previous email" → navigation: "previous", token: null
         - "read my emails" → navigation: "none", token: null
+
+        Draft examples:
+        - "draft a reply to this message" → message_reference: "this", custom_body: ""
+        - "reply to last message saying I'll be there" → message_reference: "this", custom_body: "I'll be there"
+        - "draft reply to message from john telling him thanks" → message_reference: "from john", custom_body: "thanks"
 
         Respond exactly as a valid JSON object:
         {{
@@ -75,7 +89,9 @@ class GeminiClient:
         "display": "[format]",
         "gmail_query": "[gmail search query]",
         "navigation": "[next|previous|none]",
-        "token": "[extracted_token_or_null]"
+        "token": "[extracted_token_or_null]",
+        "message_reference": "[message_reference_for_draft]",
+        "custom_body": "[custom_body_for_draft]"
         }}
 
         """
@@ -146,7 +162,9 @@ class GeminiClient:
             "limit": DEFAULT_EMAIL_LIMIT,
             "display": "PREVIEW",
             "navigation": "none",
-            "token": None
+            "token": None,
+            "message_reference": "this",
+            "custom_body": ""
         }
         
         try:
@@ -184,6 +202,12 @@ class GeminiClient:
                 
                 if "token" in parsed and parsed["token"]:
                     result["token"] = parsed["token"]
+                
+                if "message_reference" in parsed and parsed["message_reference"]:
+                    result["message_reference"] = parsed["message_reference"]
+                
+                if "custom_body" in parsed and parsed["custom_body"]:
+                    result["custom_body"] = parsed["custom_body"]
                 
                 return result
                 
