@@ -98,6 +98,9 @@ class NLPProcessor:
         # Only update the next token after navigation or new searches
         navigation_manager.set_next_page_token(next_page_token)
         
+        # Store messages in navigation manager for draft context
+        navigation_manager.store_recent_messages(messages)
+        
         response_text = self._format_messages_response(messages, display_format)
         
         # Add navigation commands
@@ -161,19 +164,24 @@ class NLPProcessor:
         }
     
     def _handle_draft_request(self, user_input: str, intent_data: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
-        # For now, assume user wants to reply to the latest unread message
-        result = self.gmail_service.search_messages("is:unread", 1)
-        messages = result["messages"]
+        navigation_manager = self.get_navigation_manager(user_id)
         
-        if not messages:
+        # Extract message reference and custom body from intent data
+        message_reference = intent_data.get("message_reference", "this")
+        custom_body = intent_data.get("custom_body", "")
+        
+        # Find the target message using navigation manager
+        original_message = navigation_manager.find_message_by_reference(message_reference)
+        
+        if not original_message:
             return {
                 "action": "draft",
                 "success": False,
-                "response": "No messages found to reply to."
+                "response": "No recent messages found to reply to. Please read some messages first."
             }
         
-        original_message = messages[0]
-        draft_content = self.gemini_client.generate_draft_reply(original_message, user_input)
+        # Generate draft using existing method (handles custom_body automatically)
+        draft_content = self.gemini_client.generate_draft_reply(original_message, custom_body)
         
         # Extract recipient from original sender
         original_sender = original_message.get("sender", "")
@@ -184,7 +192,7 @@ class NLPProcessor:
             draft_id = self.gmail_service.create_draft(recipient_email, subject, draft_content)
             
             if draft_id:
-                response = f"Draft created successfully. Draft ID: {draft_id}"
+                response = f"Draft created successfully for message '{original_message.get('subject', 'No subject')}'. Draft ID: {draft_id}"
                 success = True
             else:
                 response = "Failed to create draft."
@@ -197,6 +205,8 @@ class NLPProcessor:
             "action": "draft",
             "original_message": original_message,
             "draft_content": draft_content,
+            "message_reference": message_reference,
+            "custom_body": custom_body,
             "success": success,
             "response": response
         }
