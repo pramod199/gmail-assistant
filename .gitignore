@@ -121,3 +121,4 @@ dmypy.json
 .idea
 
 .claude
+firebase-service-account.json
