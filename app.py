@@ -12,6 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from src.api.middleware.auth import firebase_auth_middleware
 from src.api.controllers.gmail_controller import router as gmail_router
 from src.api.controllers.auth_controller import router as auth_router
+from src.api.controllers.voice_controller import router as voice_router
 
 
 @asynccontextmanager
@@ -45,6 +46,7 @@ app.middleware("http")(firebase_auth_middleware)
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
 app.include_router(gmail_router, prefix="/api/gmail", tags=["gmail"])
+app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 
 
 @app.get("/")

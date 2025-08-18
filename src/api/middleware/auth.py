@@ -1,7 +1,26 @@
 import firebase_admin
 from firebase_admin import credentials, auth
 from fastapi import HTTPException, Request
-from typing import Optional
+from typing import Optional, Dict, Any
+
+
+def verify_firebase_token(token: str) -> Dict[str, Any]:
+    """
+    Core Firebase token validation logic extracted from middleware
+    Returns user info or raises exception
+    """
+    # Ensure Firebase is initialized before token validation
+    initialize_firebase()
+    
+    decoded_token = auth.verify_id_token(token)
+    user_id = decoded_token.get("uid")
+    user_email = decoded_token.get("email")
+    
+    return {
+        "user_id": user_id,
+        "user_email": user_email,
+        "firebase_token": decoded_token
+    }
 
 
 # Initialize Firebase Admin SDK
@@ -30,9 +49,6 @@ async def firebase_auth_middleware(request: Request, call_next):
     Skips auth for public endpoints (/, /health, /api/auth/*)
     For protected endpoints, validates Firebase ID token
     """
-    
-    # Initialize Firebase if not already done
-    initialize_firebase()
     
     # Skip auth for public endpoints
     public_paths = ["/", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"]
@@ -85,13 +101,14 @@ async def firebase_auth_middleware(request: Request, call_next):
                 content={"detail": "Invalid authorization header format"}
             )
         
-        # Verify Firebase ID token
+        # Verify Firebase ID token using extracted utility
         print(f"DEBUG: Verifying Firebase token...")
         print(f"DEBUG: Token starts with: {token[:50]}...")
         try:
-            decoded_token = auth.verify_id_token(token)
-            user_id = decoded_token.get("uid")
-            user_email = decoded_token.get("email")
+            user_info = verify_firebase_token(token)
+            user_id = user_info["user_id"]
+            user_email = user_info["user_email"]
+            decoded_token = user_info["firebase_token"]
             print(f"DEBUG: Token verified! User: {user_id}, Email: {user_email}")
         except Exception as token_error:
             print(f"DEBUG: Token verification failed: {token_error}")
