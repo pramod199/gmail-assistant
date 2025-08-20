@@ -1,9 +1,13 @@
 import asyncio
+import logging
 import re
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable, AsyncGenerator
 from google import genai
 from google.genai import types
+
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiLiveClient:
@@ -165,105 +169,115 @@ Keep responses concise but informative. Ask for clarification when needed.""",
                 )
             )
         except Exception as e:
-            print(f"DEBUG: Audio send error: {e}")
+            logger.error(f"Audio send error: {e}")
             # Just continue - audio sending failure shouldn't crash everything
     
     async def process_responses(self, session, function_handler: Callable = None) -> AsyncGenerator[Dict[str, Any], None]:
         """Process responses from Gemini Live API and handle function calls"""
-        print(f"DEBUG: Session type: {type(session)}")
-        print(f"DEBUG: Session methods: {[method for method in dir(session) if not method.startswith('_')]}")
+        logger.info(f"Starting Gemini Live response processing")
+        logger.debug(f"Session type: {type(session)}")
+        logger.debug(f"Session methods: {[method for method in dir(session) if not method.startswith('_')]}")
         
-        async for response in session.receive():
-            print(f"DEBUG: Raw Gemini response: {response}")
-            
-            response_data = {
-                "type": "response",
-                "data": None,
-                "text": None,
-                "function_call": None,
-                "audio_data": None
-            }
-            
-            # Handle audio response from server_content
-            if hasattr(response, 'server_content') and response.server_content:
-                server_content = response.server_content
+        try:
+            response_count = 0
+            async for response in session.receive():
+                response_count += 1
+                logger.debug(f"Processing response #{response_count}")
+                logger.debug(f"Raw Gemini response: {response}")
                 
-                # Check for audio data
-                if hasattr(server_content, 'model_turn') and server_content.model_turn:
-                    model_turn = server_content.model_turn
-                    for part in model_turn.parts:
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            print(f"DEBUG: Found audio data")
-                            response_data["type"] = "audio"
-                            response_data["audio_data"] = part.inline_data.data
-                            yield response_data
-            
-            # Handle text response
-            if hasattr(response, 'text') and response.text:
-                print(f"DEBUG: Found text response: {response.text}")
-                response_data["type"] = "text"
-                response_data["text"] = response.text
-                yield response_data
-            
-            # Handle tool calls (new format)
-            if hasattr(response, 'tool_call') and response.tool_call:
-                print(f"DEBUG: Found tool call: {response.tool_call}")
+                response_data = {
+                    "type": "response",
+                    "data": None,
+                    "text": None,
+                    "function_call": None,
+                    "audio_data": None
+                }
                 
-                # Process each function call
-                for function_call in response.tool_call.function_calls:
-                    print(f"DEBUG: Processing function: {function_call.name} with args: {function_call.args}")
+                # Handle audio response from server_content
+                if hasattr(response, 'server_content') and response.server_content:
+                    server_content = response.server_content
                     
-                    response_data["type"] = "function_call"
-                    response_data["function_call"] = {
-                        "name": function_call.name,
-                        "parameters": function_call.args,
-                        "id": function_call.id
-                    }
-                    
-                    # Execute function if handler provided
-                    if function_handler:
-                        try:
-                            print(f"DEBUG: Executing function with handler")
-                            function_result = await function_handler(response_data["function_call"])
-                            print(f"DEBUG: Function result: {function_result}")
-                            print(f"DEBUG: Function result type: {type(function_result)}")
-                            
-                            # Ensure function result is a dict
-                            if not isinstance(function_result, dict):
-                                function_result = {"result": str(function_result)}
-                            
-                            # Send function result back to Gemini using send_tool_response
-                            print(f"DEBUG: Attempting to send function response...")
-                            try:
-                                function_responses = [
-                                    types.FunctionResponse(
-                                        id=function_call.id,
-                                        name=function_call.name,
-                                        response=function_result
-                                    )
-                                ]
-                                await session.send_tool_response(function_responses=function_responses)
-                                print(f"DEBUG: Function response sent successfully via send_tool_response")
-                            except Exception as e:
-                                print(f"DEBUG: Failed to send function response: {e}")
-                                import traceback
-                                traceback.print_exc()
-                                print(f"DEBUG: Continuing without sending response...")
-                            
-                        except Exception as e:
-                            print(f"Function execution error: {e}")
-                            import traceback
-                            traceback.print_exc()
-                            # Don't try to send error response for now - just continue
-                    
+                    # Check for audio data
+                    if hasattr(server_content, 'model_turn') and server_content.model_turn:
+                        model_turn = server_content.model_turn
+                        for part in model_turn.parts:
+                            if hasattr(part, 'inline_data') and part.inline_data:
+                                logger.debug(f"Found audio data")
+                                response_data["type"] = "audio"
+                                response_data["audio_data"] = part.inline_data.data
+                                yield response_data
+                
+                # Handle text response
+                if hasattr(response, 'text') and response.text:
+                    logger.debug(f"Found text response: {response.text}")
+                    response_data["type"] = "text"
+                    response_data["text"] = response.text
                     yield response_data
-            
-            # Handle tool call cancellations
-            if hasattr(response, 'tool_call_cancellation') and response.tool_call_cancellation:
-                print(f"DEBUG: Tool call cancelled: {response.tool_call_cancellation.ids}")
-                response_data["type"] = "function_cancelled"
-                response_data["cancelled_ids"] = response.tool_call_cancellation.ids
-                yield response_data
+                
+                # Handle tool calls (new format)
+                if hasattr(response, 'tool_call') and response.tool_call:
+                    logger.debug(f"Found tool call: {response.tool_call}")
+                    
+                    # Process each function call
+                    for function_call in response.tool_call.function_calls:
+                        logger.debug(f"Processing function: {function_call.name} with args: {function_call.args}")
+                        
+                        response_data["type"] = "function_call"
+                        response_data["function_call"] = {
+                            "name": function_call.name,
+                            "parameters": function_call.args,
+                            "id": function_call.id
+                        }
+                        
+                        # Execute function if handler provided
+                        if function_handler:
+                            try:
+                                logger.debug(f"Executing function with handler")
+                                function_result = await function_handler(response_data["function_call"])
+                                logger.debug(f"Function result: {function_result}")
+                                logger.debug(f"Function result type: {type(function_result)}")
+                                
+                                # Ensure function result is a dict
+                                if not isinstance(function_result, dict):
+                                    function_result = {"result": str(function_result)}
+                                
+                                # Send function result back to Gemini using send_tool_response
+                                logger.debug(f"Attempting to send function response...")
+                                try:
+                                    function_responses = [
+                                        types.FunctionResponse(
+                                            id=function_call.id,
+                                            name=function_call.name,
+                                            response=function_result
+                                        )
+                                    ]
+                                    await session.send_tool_response(function_responses=function_responses)
+                                    logger.debug(f"Function response sent successfully via send_tool_response")
+                                except Exception as e:
+                                    logger.error(f"Failed to send function response: {e}")
+                                    logger.error(f"Continuing without sending response...")
+                                
+                            except Exception as e:
+                                logger.error(f"Function execution error: {e}")
+                                # Don't try to send error response for now - just continue
+                        
+                        yield response_data
+                
+                # Handle tool call cancellations
+                if hasattr(response, 'tool_call_cancellation') and response.tool_call_cancellation:
+                    logger.debug(f"Tool call cancelled: {response.tool_call_cancellation.ids}")
+                    response_data["type"] = "function_cancelled"
+                    response_data["cancelled_ids"] = response.tool_call_cancellation.ids
+                    yield response_data
+        
+        except asyncio.CancelledError:
+            logger.info("Response processing cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in process_responses: {e}")
+            raise
+        finally:
+            logger.info("Finished Gemini Live response processing")
     
     async def send_text_input(self, session, text: str):
         """Send text input to session (for debugging)"""
