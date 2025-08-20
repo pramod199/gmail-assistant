@@ -182,7 +182,7 @@ class GmailVoiceClient:
                     print(f"📊 Session: {current + 1}/{total}" + (" (+more)" if has_more else ""))
                 
                 elif message_type == "error":
-                    print(f"❌ Error: {message.get('message')}")
+                    print(f"❌ Error response: {json.dumps(message, indent=2)}")
                 
                 else:
                     print(f"❓ Unknown message type: {message_type}")

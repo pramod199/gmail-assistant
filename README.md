@@ -249,6 +249,57 @@ user_sessions = {
 
 ## Testing
 
+### Local Testing - Complete Walkthrough
+
+**Prerequisites Check:**
+```bash
+# 1. Verify Python version
+python --version  # Should be 3.11+
+
+# 2. Check Redis is running
+redis-cli ping     # Should return PONG
+
+# 3. Verify required files exist
+ls firebase-service-account.json credentials.json
+```
+
+**Step 1: Install Dependencies**
+```bash
+pip install -r requirements.txt
+```
+
+**Step 2: Generate Test Firebase Token**
+```bash
+python create_test_token.py
+```
+Save the generated token - you'll need it for testing.
+
+**Step 3: Start FastAPI Server** 
+```bash
+python app.py
+```
+Server should start on `http://localhost:8000`. Verify with:
+```bash
+curl http://localhost:8000/health
+```
+
+**Step 4: Authorize Gmail Access**
+```bash
+# Get your Firebase token from Step 2, then:
+curl -H "Authorization: Bearer YOUR_FIREBASE_TOKEN" \
+     http://localhost:8000/api/auth/gmail/status
+```
+If `is_authorized: false`, visit the returned `auth_url` in browser to complete OAuth.
+
+**Step 5: Test Voice Interface**
+```bash
+# In a new terminal:
+python src/clients/pyaudio_client.py
+```
+- Enter your Firebase token when prompted
+- Wait for "Connected to voice assistant!"
+- Start speaking: "Read my unread emails"
+
 ### Voice Testing Flow
 
 1. **Generate token**: `python create_test_token.py`

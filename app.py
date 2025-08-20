@@ -9,15 +9,23 @@ from contextlib import asynccontextmanager
 # Add src to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
+from src.config.logging_config import setup_logging
 from src.api.middleware.auth import firebase_auth_middleware
 from src.api.controllers.gmail_controller import router as gmail_router
 from src.api.controllers.auth_controller import router as auth_router
 from src.api.controllers.voice_controller import router as voice_router
+from src.api.handlers.exception_handler import (
+    http_exception_handler,
+    firebase_auth_exception_handler, 
+    general_exception_handler
+)
+from firebase_admin.auth import InvalidIdTokenError
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    setup_logging()
     print("🚀 Starting Gmail Assistant API...")
     yield
     # Shutdown
@@ -42,6 +50,11 @@ app.add_middleware(
 
 # Firebase auth middleware
 app.middleware("http")(firebase_auth_middleware)
+
+# Register exception handlers
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(InvalidIdTokenError, firebase_auth_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])

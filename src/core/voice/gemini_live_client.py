@@ -1,4 +1,6 @@
 import asyncio
+import re
+from datetime import datetime
 from typing import Dict, Any, Optional, Callable, AsyncGenerator
 from google import genai
 from google.genai import types
@@ -141,28 +143,39 @@ Keep responses concise but informative. Ask for clarification when needed.""",
         """Create streaming session with function calling support"""
         config = self.get_session_config()
         
-        session = await self.client.aio.live.connect(
+        # Return the async context manager directly
+        session_context = self.client.aio.live.connect(
             model=self.model,
             config=config
         )
         
-        # Store function handler for processing function calls
-        session._function_handler = function_handler
+        # Store function handler reference for later use
+        session_context._function_handler = function_handler
         
-        return session
+        return session_context
     
     async def send_audio_chunk(self, session, audio_data: bytes, mime_type: str = "audio/pcm;rate=16000"):
         """Send audio chunk to Gemini Live API"""
-        await session.send_realtime_input(
-            audio=types.Blob(
-                data=audio_data,
-                mime_type=mime_type
+        try:
+            # Try the old method first
+            await session.send_realtime_input(
+                audio=types.Blob(
+                    data=audio_data,
+                    mime_type=mime_type
+                )
             )
-        )
+        except Exception as e:
+            print(f"DEBUG: Audio send error: {e}")
+            # Just continue - audio sending failure shouldn't crash everything
     
     async def process_responses(self, session, function_handler: Callable = None) -> AsyncGenerator[Dict[str, Any], None]:
         """Process responses from Gemini Live API and handle function calls"""
+        print(f"DEBUG: Session type: {type(session)}")
+        print(f"DEBUG: Session methods: {[method for method in dir(session) if not method.startswith('_')]}")
+        
         async for response in session.receive():
+            print(f"DEBUG: Raw Gemini response: {response}")
+            
             response_data = {
                 "type": "response",
                 "data": None,
@@ -171,45 +184,102 @@ Keep responses concise but informative. Ask for clarification when needed.""",
                 "audio_data": None
             }
             
-            # Handle audio response
-            if hasattr(response, 'data') and response.data:
-                response_data["type"] = "audio"
-                response_data["audio_data"] = response.data
-                yield response_data
+            # Handle audio response from server_content
+            if hasattr(response, 'server_content') and response.server_content:
+                server_content = response.server_content
+                
+                # Check for audio data
+                if hasattr(server_content, 'model_turn') and server_content.model_turn:
+                    model_turn = server_content.model_turn
+                    for part in model_turn.parts:
+                        if hasattr(part, 'inline_data') and part.inline_data:
+                            print(f"DEBUG: Found audio data")
+                            response_data["type"] = "audio"
+                            response_data["audio_data"] = part.inline_data.data
+                            yield response_data
             
-            # Handle text response (for debugging)
+            # Handle text response
             if hasattr(response, 'text') and response.text:
+                print(f"DEBUG: Found text response: {response.text}")
                 response_data["type"] = "text"
                 response_data["text"] = response.text
                 yield response_data
             
-            # Handle function calls
-            if hasattr(response, 'function_call') and response.function_call:
-                response_data["type"] = "function_call"
-                response_data["function_call"] = response.function_call
+            # Handle tool calls (new format)
+            if hasattr(response, 'tool_call') and response.tool_call:
+                print(f"DEBUG: Found tool call: {response.tool_call}")
                 
-                # Execute function if handler provided
-                if function_handler:
-                    try:
-                        function_result = await function_handler(response.function_call)
-                        # Send function result back to Gemini
-                        await session.send_function_response(function_result)
-                    except Exception as e:
-                        print(f"Function execution error: {e}")
-                        await session.send_function_response({
-                            "error": str(e)
-                        })
-                
+                # Process each function call
+                for function_call in response.tool_call.function_calls:
+                    print(f"DEBUG: Processing function: {function_call.name} with args: {function_call.args}")
+                    
+                    response_data["type"] = "function_call"
+                    response_data["function_call"] = {
+                        "name": function_call.name,
+                        "parameters": function_call.args,
+                        "id": function_call.id
+                    }
+                    
+                    # Execute function if handler provided
+                    if function_handler:
+                        try:
+                            print(f"DEBUG: Executing function with handler")
+                            function_result = await function_handler(response_data["function_call"])
+                            print(f"DEBUG: Function result: {function_result}")
+                            print(f"DEBUG: Function result type: {type(function_result)}")
+                            
+                            # Ensure function result is a dict
+                            if not isinstance(function_result, dict):
+                                function_result = {"result": str(function_result)}
+                            
+                            # Send function result back to Gemini using send_tool_response
+                            print(f"DEBUG: Attempting to send function response...")
+                            try:
+                                function_responses = [
+                                    types.FunctionResponse(
+                                        id=function_call.id,
+                                        name=function_call.name,
+                                        response=function_result
+                                    )
+                                ]
+                                await session.send_tool_response(function_responses=function_responses)
+                                print(f"DEBUG: Function response sent successfully via send_tool_response")
+                            except Exception as e:
+                                print(f"DEBUG: Failed to send function response: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                print(f"DEBUG: Continuing without sending response...")
+                            
+                        except Exception as e:
+                            print(f"Function execution error: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            # Don't try to send error response for now - just continue
+                    
+                    yield response_data
+            
+            # Handle tool call cancellations
+            if hasattr(response, 'tool_call_cancellation') and response.tool_call_cancellation:
+                print(f"DEBUG: Tool call cancelled: {response.tool_call_cancellation.ids}")
+                response_data["type"] = "function_cancelled"
+                response_data["cancelled_ids"] = response.tool_call_cancellation.ids
                 yield response_data
     
     async def send_text_input(self, session, text: str):
         """Send text input to session (for debugging)"""
-        await session.send(text)
+        await session.send_message(types.LiveClientMessage(
+            client_content=types.LiveClientContent(
+                turns=[
+                    types.Turn(
+                        role="user",
+                        parts=[types.Part(text=text)]
+                    )
+                ]
+            )
+        ))
     
     def format_voice_response(self, text: str) -> str:
         """Format text for natural voice delivery"""
-        import re
-        from datetime import datetime
         
         # Convert timestamps to natural language
         # This is a simplified version - you might want more sophisticated parsing
