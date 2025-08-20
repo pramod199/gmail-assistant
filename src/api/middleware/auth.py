@@ -1,7 +1,13 @@
+import logging
 import firebase_admin
 from firebase_admin import credentials, auth
 from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
 from typing import Optional, Dict, Any
+
+from ...config.settings import FIREBASE_SERVICE_ACCOUNT_PATH
+
+logger = logging.getLogger(__name__)
 
 
 def verify_firebase_token(token: str) -> Dict[str, Any]:
@@ -9,37 +15,56 @@ def verify_firebase_token(token: str) -> Dict[str, Any]:
     Core Firebase token validation logic extracted from middleware
     Returns user info or raises exception
     """
-    # Ensure Firebase is initialized before token validation
-    initialize_firebase()
-    
-    decoded_token = auth.verify_id_token(token)
-    user_id = decoded_token.get("uid")
-    user_email = decoded_token.get("email")
-    
-    return {
-        "user_id": user_id,
-        "user_email": user_email,
-        "firebase_token": decoded_token
-    }
+    try:
+        # Ensure Firebase is initialized before token validation
+        initialize_firebase()
+        
+        # Verify the Firebase ID token
+        decoded_token = auth.verify_id_token(token)
+        user_id = decoded_token.get("uid")
+        user_email = decoded_token.get("email")
+        
+        if not user_id:
+            logger.error("Firebase token missing user ID")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Firebase token: missing user ID"
+            )
+        
+        logger.info(f"Firebase token verified for user: {user_id}")
+        
+        return {
+            "user_id": user_id,
+            "user_email": user_email,
+            "firebase_token": decoded_token
+        }
+        
+    except auth.InvalidIdTokenError as e:
+        logger.error(f"Firebase ID token error: {e}")
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid Firebase ID token: {e.args[0] if e.args else 'Token validation failed'}"
+        )
 
 
 # Initialize Firebase Admin SDK
 def initialize_firebase():
     if not firebase_admin._apps:
         try:
-            from ...config.settings import FIREBASE_SERVICE_ACCOUNT_PATH
-            
             # For production, use service account key file
             # For development, use GOOGLE_APPLICATION_CREDENTIALS env var
             if FIREBASE_SERVICE_ACCOUNT_PATH:
                 cred = credentials.Certificate(FIREBASE_SERVICE_ACCOUNT_PATH)
                 firebase_admin.initialize_app(cred)
+                logger.info("Firebase initialized with service account")
             else:
                 # Use default credentials (from GOOGLE_APPLICATION_CREDENTIALS)
                 firebase_admin.initialize_app()
+                logger.info("Firebase initialized with default credentials")
         except Exception as e:
-            print(f"Warning: Firebase initialization failed: {e}")
-            print("Firebase authentication will not work without proper configuration")
+            logger.error(f"Firebase initialization failed: {e}")
+            logger.error("Cannot start application without proper Firebase configuration")
+            raise RuntimeError(f"Firebase initialization failed: {e}") from e
 
 
 async def firebase_auth_middleware(request: Request, call_next):
@@ -68,82 +93,66 @@ async def firebase_auth_middleware(request: Request, call_next):
     
     # Validate Firebase token for protected endpoints
     try:
-        print(f"DEBUG: Processing protected endpoint: {path}")
+        logger.debug(f"Processing protected endpoint: {path}")
         
         # Extract Authorization header
         authorization = request.headers.get("Authorization")
-        print(f"DEBUG: Auth header present: {authorization is not None}")
         
         if not authorization:
-            print("DEBUG: No authorization header found")
-            from fastapi.responses import JSONResponse
+            logger.debug("No authorization header found")
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authorization header missing"}
             )
         
         # Extract token from "Bearer <token>" format  
-        print(f"DEBUG: Raw authorization header: '{authorization}'")
+        logger.debug(f"Raw authorization header: '{authorization}'")
         try:
             parts = authorization.split(" ", 1)  # Split only once
-            print(f"DEBUG: Split parts: {len(parts)}, Parts: {parts}")
             if len(parts) != 2:
                 raise ValueError("Invalid authorization header format")
             scheme, token = parts
-            print(f"DEBUG: Scheme: '{scheme}', Token length: {len(token)}")
             if scheme.lower() != "bearer":
                 raise ValueError("Invalid authorization scheme")
         except ValueError as e:
-            print(f"DEBUG: Auth format error: {e}")
-            from fastapi.responses import JSONResponse
+            logger.debug(f"Auth format error: {e}")
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid authorization header format"}
             )
         
         # Verify Firebase ID token using extracted utility
-        print(f"DEBUG: Verifying Firebase token...")
-        print(f"DEBUG: Token starts with: {token[:50]}...")
+        logger.debug("Verifying Firebase token...")
         try:
             user_info = verify_firebase_token(token)
             user_id = user_info["user_id"]
             user_email = user_info["user_email"]
             decoded_token = user_info["firebase_token"]
-            print(f"DEBUG: Token verified! User: {user_id}, Email: {user_email}")
-        except Exception as token_error:
-            print(f"DEBUG: Token verification failed: {token_error}")
-            print(f"DEBUG: Token type: {type(token)}")
-            print(f"DEBUG: Token length: {len(token)}")
-            from fastapi.responses import JSONResponse
+            logger.debug(f"Token verified! User: {user_id}, Email: {user_email}")
+        except HTTPException as e:
+            # Convert HTTPException to JSONResponse to avoid Starlette error handling
             return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid Firebase ID token"}
+                status_code=e.status_code,
+                content={"detail": e.detail}
             )
+            raise e
         
         # Add user info to request state
         request.state.user_id = user_id
         request.state.user_email = user_email
         request.state.firebase_token = decoded_token
         
-        print(f"DEBUG: Request state set: user_id={user_id}")
+        logger.debug(f"Request state set: user_id={user_id}")
         
         # Continue to the next middleware/endpoint
         response = await call_next(request)
         return response
         
-    except auth.InvalidIdTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Firebase ID token"
-        )
-    except HTTPException:
-        # Re-raise HTTPExceptions as-is
-        raise
     except Exception as e:
-        print(f"Authentication error: {e}")
-        raise HTTPException(
+        logger.error(f"Authentication error: {e}")
+        return JSONResponse(
             status_code=500,
-            detail="Internal authentication error"
+            content={"detail": "Internal authentication error"}
         )
 
 

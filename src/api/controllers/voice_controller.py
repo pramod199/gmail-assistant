@@ -21,17 +21,17 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(...)
     - Gemini Live API session
     - Redis session state
     """
-    user_info = None
+    user_id = None
     
     try:
-        # Authenticate this user using the same logic as HTTP middleware
-        user_info = verify_firebase_token(token)
-        user_id = user_info["user_id"]
+        logger.info("WebSocket connection attempt")
         
-        logger.info(f"WebSocket authentication successful for user {user_id}")
+        # Let the handler manage authentication and WebSocket accept
+        user_id = await voice_handler.connect(websocket, token)
         
-        # Establish connection for this specific user
-        await voice_handler.connect(websocket, token)
+        if not user_id:
+            logger.error("Failed to establish connection - no user_id returned")
+            return
         
         logger.info(f"WebSocket connection established for user {user_id}")
         
@@ -61,13 +61,9 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(...)
                 })
     
     except Exception as e:
-        logger.error(f"WebSocket authentication failed: {e}")
-        try:
-            await websocket.close(code=4001, reason="Authentication failed")
-        except:
-            pass
+        logger.error(f"WebSocket connection failed: {e}")
     
     finally:
         # Cleanup this user's connection
-        if user_info:
-            await voice_handler.disconnect(user_info["user_id"])
+        if user_id:
+            await voice_handler.disconnect(user_id)

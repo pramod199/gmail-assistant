@@ -3,13 +3,13 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect, HTTPException
-from firebase_admin import auth
 
 from ...core.voice.gemini_live_client import GeminiLiveClient
 from ...core.voice.function_handler import GmailFunctionHandler
 from ...core.gmail_client.gmail_service import GmailService
 from ...core.session.session_manager import SessionManager
 from ...core.auth.user_credential_store import UserCredentialStore
+from ..middleware.auth import verify_firebase_token
 
 
 logger = logging.getLogger(__name__)
@@ -26,28 +26,33 @@ class VoiceWebSocketHandler:
     async def connect(self, websocket: WebSocket, token: str):
         """Establish WebSocket connection with authentication"""
         try:
-            # Validate Firebase token
-            decoded_token = auth.verify_id_token(token)
-            user_id = decoded_token.get("uid")
-            user_email = decoded_token.get("email")
+            # Validate Firebase token using the proper auth method
+            user_info = verify_firebase_token(token)
+            user_id = user_info["user_id"]
+            user_email = user_info["user_email"]
             
             if not user_id:
                 await websocket.close(code=4001, reason="Invalid user ID in token")
-                return
+                return None
             
-            # Accept WebSocket connection
+            # Accept WebSocket connection first
             await websocket.accept()
+            logger.info(f"WebSocket accepted for user {user_id}")
             
-            # Get user's Gmail credentials
+            # Get user's Gmail credentials from Redis
             gmail_credentials = self.credential_store.get_credentials(user_id)
             if not gmail_credentials:
+                # Send error message with auth URL before closing
+                logger.info(f"gmail auth not found {user_id}")
                 await websocket.send_json({
                     "type": "error",
                     "message": "Gmail authorization required. Please authorize Gmail access first.",
-                    "action_required": "gmail_auth"
+                    "action_required": "gmail_auth",
+                    "auth_url": f"/api/auth/gmail/authorize",
+                    "user_id": user_id
                 })
                 await websocket.close(code=4002, reason="Gmail authorization required")
-                return
+                return None
             
             # Initialize services for this user
             gmail_service = self._create_gmail_service(gmail_credentials)
@@ -75,13 +80,15 @@ class VoiceWebSocketHandler:
             })
             
             logger.info(f"WebSocket connected for user {user_id} ({user_email})")
+            return user_id
             
-        except auth.InvalidIdTokenError as e:
-            logger.error(f"Invalid Firebase token: {e}")
-            await websocket.close(code=4001, reason="Invalid Firebase token")
         except Exception as e:
             logger.error(f"Connection error: {e}")
-            await websocket.close(code=4000, reason="Connection failed")
+            try:
+                await websocket.close(code=4000, reason="Connection failed")
+            except:
+                pass
+            return None
     
     async def handle_message(self, websocket: WebSocket, user_id: str, message: Dict[str, Any]):
         """Process incoming WebSocket message"""
@@ -124,12 +131,16 @@ class VoiceWebSocketHandler:
             gemini_client = connection["gemini_client"]
             function_handler = connection["function_handler"]
             
-            # Create Gemini Live session with function calling
-            gemini_session = await gemini_client.create_session(
+            # Get Gemini Live session context manager
+            session_context = await gemini_client.create_session(
                 function_handler=function_handler.handle_function_call
             )
             
+            # Start the session using async context manager
+            gemini_session = await session_context.__aenter__()
+            
             connection["gemini_session"] = gemini_session
+            connection["session_context"] = session_context  # Store context for cleanup
             
             # Start processing responses from Gemini
             asyncio.create_task(self._process_gemini_responses(websocket, user_id, connection))
@@ -189,8 +200,11 @@ class VoiceWebSocketHandler:
             gemini_session = connection["gemini_session"]
             gemini_client = connection["gemini_client"]
             
-            async for response in gemini_client.process_responses(gemini_session):
+            logger.info(f"Starting Gemini response processing for user {user_id}")
+            
+            async for response in gemini_client.process_responses(gemini_session, function_handler=connection["function_handler"].handle_function_call):
                 response_type = response.get("type")
+                logger.info(f"Received Gemini response type: {response_type} for user {user_id}")
                 
                 if response_type == "audio":
                     # Stream audio response back to client
@@ -240,11 +254,14 @@ class VoiceWebSocketHandler:
     async def _end_voice_session(self, websocket: WebSocket, user_id: str, connection: Dict[str, Any]):
         """End the current voice session"""
         try:
+            session_context = connection.get("session_context")
             gemini_session = connection.get("gemini_session")
-            if gemini_session:
-                # Close Gemini session
-                await gemini_session.close()
+            
+            if session_context and gemini_session:
+                # Properly close the context manager
+                await session_context.__aexit__(None, None, None)
                 connection["gemini_session"] = None
+                connection["session_context"] = None
             
             await websocket.send_json({
                 "type": "voice_session_ended",
@@ -263,9 +280,11 @@ class VoiceWebSocketHandler:
                 connection = self.active_connections[user_id]
                 
                 # Close Gemini session if active
+                session_context = connection.get("session_context")
                 gemini_session = connection.get("gemini_session")
-                if gemini_session:
-                    await gemini_session.close()
+                
+                if session_context and gemini_session:
+                    await session_context.__aexit__(None, None, None)
                 
                 # Remove from active connections
                 del self.active_connections[user_id]
