@@ -64,20 +64,7 @@ def _get_user_gmail_service(user_id: str) -> GmailService:
             detail="Gmail authorization required. Please authorize Gmail access first."
         )
     
-    # Create a temporary auth object with user credentials
-    class UserAuth:
-        def __init__(self, creds):
-            self._credentials = creds
-        
-        def authenticate(self):
-            """Return stored credentials - required by GmailService"""
-            return self._credentials
-        
-        def get_credentials(self):
-            return self._credentials
-    
-    user_auth = UserAuth(credentials)
-    return GmailService(user_auth)
+    return GmailService(credentials)
 
 
 @router.post("/process", response_model=ProcessResponse)
@@ -117,7 +104,7 @@ async def process_natural_language_request(
         if "Gmail authorization required" in str(e):
             # Import here to avoid circular imports
             from .auth_controller import _generate_auth_url
-            auth_url = _generate_auth_url(user_id, request)
+            auth_url = _generate_auth_url(user_id)
             
             return ProcessResponse(
                 response=f"Gmail authorization required. Please visit: {auth_url}",

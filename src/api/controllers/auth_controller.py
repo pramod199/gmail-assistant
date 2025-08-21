@@ -43,7 +43,7 @@ async def gmail_auth_status(request: Request, user: dict = Depends(get_current_u
         )
     
     # Generate authorization URL
-    auth_url = _generate_auth_url(user_id, request)
+    auth_url = _generate_auth_url(user_id)
     
     return GmailAuthStatus(
         is_authorized=False,
@@ -59,7 +59,7 @@ async def gmail_authorize(request: Request, user: dict = Depends(get_current_use
     Redirects user to Google OAuth consent screen
     """
     user_id = user["user_id"]
-    auth_url = _generate_auth_url(user_id, request)
+    auth_url = _generate_auth_url(user_id)
     
     return RedirectResponse(url=auth_url)
 
@@ -129,7 +129,7 @@ async def revoke_gmail_access(user: dict = Depends(get_current_user)):
     return {"message": "Gmail access revoked successfully"}
 
 
-def _create_oauth_flow(request: Request) -> Flow:
+def _create_oauth_flow() -> Flow:
     """Create OAuth flow with proper redirect URI"""
     import os
     
@@ -154,9 +154,9 @@ def _create_oauth_flow(request: Request) -> Flow:
     return flow
 
 
-def _generate_auth_url(user_id: str, request: Request) -> str:
+def _generate_auth_url(user_id: str) -> str:
     """Generate OAuth authorization URL with secure state"""
-    flow = _create_oauth_flow(request)
+    flow = _create_oauth_flow()
     
     # Create secure state parameter with user_id and CSRF protection
     nonce = secrets.token_urlsafe(32)
