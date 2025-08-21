@@ -7,26 +7,11 @@ class SessionManager:
     """Manage user sessions for voice interactions"""
     
     # Redis hash names
-    USER_TOKENS = "user_tokens"
     USER_SESSIONS = "user_sessions" 
     DRAFT_STORAGE = "draft_storage"
     
     def __init__(self):
         self.redis = RedisClient()
-    
-    # Token Management
-    def store_user_tokens(self, firebase_uid: str, token_data: Dict[str, Any]) -> bool:
-        """Store all user tokens in centralized hash"""
-        token_data["last_updated"] = int(time.time())
-        return self.redis.hset(self.USER_TOKENS, firebase_uid, token_data)
-    
-    def get_user_tokens(self, firebase_uid: str) -> Optional[Dict[str, Any]]:
-        """Get user tokens from centralized hash"""
-        return self.redis.hget(self.USER_TOKENS, firebase_uid)
-    
-    def remove_user_tokens(self, firebase_uid: str) -> bool:
-        """Remove user tokens"""
-        return self.redis.hdel(self.USER_TOKENS, firebase_uid)
     
     # Session State Management
     def store_session_state(self, firebase_uid: str, session_data: Dict[str, Any]) -> bool:
@@ -93,10 +78,9 @@ class SessionManager:
         return session
     
     def cleanup_user_data(self, firebase_uid: str) -> bool:
-        """Remove all user data (tokens, session, drafts)"""
-        tokens_removed = self.remove_user_tokens(firebase_uid)
+        """Remove all user data (session, drafts)"""
         session_removed = self.clear_session_state(firebase_uid)
         draft_removed = self.clear_draft(firebase_uid)
         
-        print(f"User cleanup for {firebase_uid}: tokens={tokens_removed}, session={session_removed}, draft={draft_removed}")
-        return tokens_removed or session_removed or draft_removed
+        print(f"User cleanup for {firebase_uid}: session={session_removed}, draft={draft_removed}")
+        return session_removed or draft_removed

@@ -72,14 +72,16 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(...)
 #### **Server Handler** (`src/api/websocket/voice_handler.py`):
 ```python
 class VoiceWebSocketHandler:
-    # Manages per-user connections
+    # Manages per-user connections with automatic task monitoring
     self.active_connections: Dict[str, Dict[str, Any]] = {
         "user_id": {
             "websocket": websocket,
             "gmail_service": GmailService(),
             "function_handler": GmailFunctionHandler(),
             "gemini_client": GeminiLiveClient(),
-            "gemini_session": session
+            "gemini_session": session,
+            "response_task": asyncio.Task,        # NEW: Monitors response processing
+            "session_context": context_manager    # NEW: Proper session cleanup
         }
     }
 ```
@@ -102,52 +104,17 @@ async for response in session.receive():
 ```
 
 #### **Function Definitions**:
-```python
-functions = [
-    {
-        "name": "read_messages",
-        "description": "Fetch and read Gmail messages", 
-        "parameters": {
-            "filter_type": {"enum": ["unread", "important", "starred", "all"]},
-            "max_results": {"type": "integer"},
-            "read_full": {"type": "boolean"}
-        }
-    },
-    # navigate_messages, summarize_message, mark_message, draft_email
-]
-```
+- Defines Gmail operations as Gemini function schemas
+- Includes read_messages, navigate_messages, summarize_message, mark_message, draft_email
 
 #### **Audio Processing**:
-```python
-# Send audio to Gemini
-await session.send_realtime_input(audio=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000"))
-
-# Receive audio from Gemini  
-if response.server_content.model_turn.parts[0].inline_data:
-    audio_data = part.inline_data.data
-```
+- Send: `session.send_realtime_input(audio=types.Blob(...))`
+- Receive: Extract audio from `response.server_content.model_turn.parts[0].inline_data`
 
 #### **Function Call Handling**:
-```python
-# Detect function calls
-if response.tool_call:
-    for function_call in response.tool_call.function_calls:
-        # Execute Gmail function
-        result = await function_handler.handle_function_call({
-            "name": function_call.name,
-            "parameters": function_call.args,
-            "id": function_call.id
-        })
-        
-        # Send response back to Gemini
-        await session.send_tool_response(function_responses=[
-            types.FunctionResponse(
-                id=function_call.id,
-                name=function_call.name, 
-                response=result
-            )
-        ])
-```
+- Detect: `if response.tool_call:` iterate through function calls
+- Execute: `await function_handler.handle_function_call(...)` 
+- Respond: `await session.send_tool_response(function_responses=[...])`
 
 ## 📧 Gmail API Function Calls
 
@@ -174,18 +141,7 @@ class GmailService:
 ```
 
 #### **Session Management**: `src/core/session/session_manager.py`
-
-```python
-# Redis session state per user
-session_state = {
-    "current_message_id": "gmail_msg_id",
-    "message_queue": ["msg_1", "msg_2", "msg_3"],
-    "current_filter": "unread", 
-    "current_index": 0,
-    "total_messages": 15,
-    "next_page_token": "pagination_token"
-}
-```
+- Redis session state: current_message_id, message_queue, current_filter, current_index, pagination tokens
 
 ## 🔄 Complete Voice Flow Sequence
 
@@ -248,12 +204,54 @@ session_state = {
 - **Function response format** - Correct API method usage (`send_tool_response`)
 - **Session management** - Proper context manager handling
 - **Error handling** - Graceful degradation on failures
+- **⚡ Voice Processing Continuity** - Automatic task restart for continuous voice interactions
 
 ### **💡 Architecture Benefits**:
 - **Scalable** - Can handle multiple concurrent users
 - **Extensible** - Easy to add new functions (calendar, contacts, etc.)
 - **Voice-first** - Optimized for hands-free operation
 - **Secure** - Firebase auth + OAuth token management
+
+## 🔄 Voice Processing Task Management
+
+### **Problem Solved**: Continuous Voice Interaction
+The original implementation had a critical issue where voice commands after the first interaction were ignored due to response processing tasks completing normally and not being restarted.
+
+### **Solution**: Automatic Task Restart System
+
+#### **Key Components**:
+
+1. **Task Monitoring** (`voice_handler.py:_start_response_processing`)
+   - Creates asyncio task for Gemini response processing
+   - Adds completion callback to monitor task lifecycle
+   - Handles both normal completion and error cases
+
+2. **Automatic Recovery** (`voice_handler.py:_restart_response_processing`)
+   - Automatically restarts response processing when tasks complete
+   - Validates session state before restart
+   - Provides user feedback on recovery status
+
+3. **Enhanced Error Handling** (`voice_handler.py:_process_gemini_responses`)
+   - Connection validation during processing loop
+   - Individual response error isolation
+   - Proper cancellation and cleanup handling
+
+4. **Improved Logging** (`gemini_live_client.py:process_responses`)
+   - Comprehensive lifecycle logging
+   - Response counting and debugging information
+   - Error tracking and recovery monitoring
+
+### **Flow**:
+```
+Voice Input → Response Processing Task → Task Completes → Callback Triggered → 
+New Task Started → Ready for Next Voice Input
+```
+
+### **Benefits**:
+- ✅ **Continuous Operation**: Voice commands work indefinitely without reconnection
+- ✅ **Error Recovery**: Automatic restart on both failures and normal completion  
+- ✅ **Detailed Monitoring**: Enhanced logging for production debugging
+- ✅ **Graceful Cleanup**: Proper task lifecycle management
 
 ## 🔧 Technical Implementation Details
 
@@ -286,29 +284,13 @@ src/
 ### **Key Configuration**:
 
 #### **Gemini Live Session Config**:
-```python
-config = {
-    "response_modalities": ["AUDIO"],
-    "system_instruction": "You are a helpful Gmail voice assistant...",
-    "tools": [{"function_declarations": gmail_functions}]
-}
-```
+- `response_modalities: ["AUDIO"]`, system instructions, function declarations
 
 #### **Audio Parameters**:
-```python
-INPUT_RATE = 16000   # Client audio input
-OUTPUT_RATE = 24000  # Gemini audio output
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-CHUNK = 1024
-```
+- Input: 16kHz PCM, Output: 24kHz PCM, Format: paInt16, Mono channel
 
 #### **Redis Keys**:
-```python
-gmail_credentials = f"gmail_creds:{user_id}"
-user_session = f"user_sessions:{user_id}"
-draft_storage = f"draft_storage:{user_id}"
-```
+- `gmail_creds:{user_id}`, `user_sessions:{user_id}`, `draft_storage:{user_id}`
 
 ## 🚀 Next Improvement Areas
 
