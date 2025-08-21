@@ -6,6 +6,8 @@ from typing import Dict, Any, Optional, Callable, AsyncGenerator
 from google import genai
 from google.genai import types
 
+from ...config.settings import GEMINI_API_KEY
+
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +15,17 @@ logger = logging.getLogger(__name__)
 class GeminiLiveClient:
     """Gemini Live API client for streaming voice processing"""
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self):
+        # Get API key from settings
+        api_key = GEMINI_API_KEY
+            
+        if not api_key or api_key == "your_gemini_api_key_here":
+            raise ValueError(
+                "Gemini API key is required. Please set the GEMINI_API_KEY environment variable. "
+                "You can get an API key from https://makersuite.google.com/app/apikey"
+            )
+        
+        logger.info("Initializing Gemini Live client with API key from settings")
         self.client = genai.Client(api_key=api_key)
         self.model = "gemini-2.5-flash-live-preview"
         

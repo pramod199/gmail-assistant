@@ -1,9 +1,12 @@
 from typing import Dict, Any, List, Optional
 import asyncio
 import re
+import logging
 from datetime import datetime, timezone
 from ..gmail_client.gmail_service import GmailService
 from ..session.session_manager import SessionManager
+
+logger = logging.getLogger(__name__)
 
 
 class GmailFunctionHandler:
@@ -19,7 +22,7 @@ class GmailFunctionHandler:
         function_name = function_call.get("name")
         parameters = function_call.get("parameters", {})
         
-        print(f"Executing function: {function_name} with params: {parameters}")
+        logger.info(f"Executing function: {function_name} with params: {parameters}")
         
         try:
             if function_name == "read_messages":
@@ -36,7 +39,7 @@ class GmailFunctionHandler:
                 return {"error": f"Unknown function: {function_name}"}
         
         except Exception as e:
-            print(f"Function execution error: {e}")
+            logger.error(f"Function execution error: {e}")
             return {"error": str(e)}
     
     async def read_messages(self, gmail_query: str = None, filter_type: str = None, 
@@ -52,6 +55,7 @@ class GmailFunctionHandler:
             read_full: Whether to read full message content
             max_results: Maximum number of messages to fetch
         """
+        logger.debug(f"read_messages called with params: gmail_query={gmail_query}, filter_type={filter_type}, message_index={message_index}, read_full={read_full}, max_results={max_results}")
         
         # Get or initialize session
         session_state = self.session.get_or_init_session(self.user_id)
@@ -130,6 +134,7 @@ class GmailFunctionHandler:
     
     async def navigate_messages(self, direction: str, search_criteria: Optional[Dict] = None) -> Dict[str, Any]:
         """Navigate through messages"""
+        logger.debug(f"navigate_messages called with params: direction={direction}, search_criteria={search_criteria}")
         session_state = self.session.get_session_state(self.user_id)
         
         if not session_state or not session_state.get("message_queue"):
@@ -188,6 +193,7 @@ class GmailFunctionHandler:
     
     async def fetch_next_page(self) -> Dict[str, Any]:
         """Fetch next page of messages using pagination token"""
+        logger.debug(f"fetch_next_page called for user: {self.user_id}")
         session_state = self.session.get_session_state(self.user_id)
         next_page_token = session_state.get("next_page_token")
         current_query = session_state.get("current_query", "is:unread")
@@ -231,6 +237,7 @@ class GmailFunctionHandler:
     
     async def summarize_message(self, message_index: Optional[int] = None) -> Dict[str, Any]:
         """Summarize current or specified message"""
+        logger.debug(f"summarize_message called with params: message_index={message_index}")
         session_state = self.session.get_session_state(self.user_id)
         
         if not session_state or not session_state.get("message_queue"):
@@ -263,6 +270,7 @@ class GmailFunctionHandler:
     
     async def mark_message(self, action: str, message_index: Optional[int] = None) -> Dict[str, Any]:
         """Mark message with specified action"""
+        logger.debug(f"mark_message called with params: action={action}, message_index={message_index}")
         session_state = self.session.get_session_state(self.user_id)
         
         if not session_state or not session_state.get("message_queue"):
@@ -301,6 +309,7 @@ class GmailFunctionHandler:
     
     async def draft_email(self, action: str, **kwargs) -> Dict[str, Any]:
         """Handle email draft operations"""
+        logger.debug(f"draft_email called with params: action={action}, kwargs={kwargs}")
         
         if action == "create":
             recipient = kwargs.get("recipient")
@@ -337,12 +346,13 @@ class GmailFunctionHandler:
             )
             
             if draft_id:
-                success = self.gmail.send_draft(draft_id)
-                if success:
-                    self.session.clear_draft(self.user_id)
-                    return {"response": "Email sent successfully!"}
-                else:
-                    return {"error": "Failed to send email"}
+                # success = self.gmail.send_draft(draft_id)  # don't send in actual
+                # if success:
+                #     self.session.clear_draft(self.user_id)
+                #     return {"response": "Email sent successfully!"}
+                # else:
+                #     return {"error": "Failed to send email"}
+                return {"response": "Draft created successfully, please review from gmail!"}
             else:
                 return {"error": "Failed to create draft for sending"}
         
@@ -359,6 +369,7 @@ class GmailFunctionHandler:
         Note: Content is already cleaned of HTML/CSS by GmailService._clean_html_content()
         This function focuses on voice-specific formatting.
         """
+        logger.debug(f"format_message_for_voice called with params: message_id={message.get('id', 'unknown')}, subject={message.get('subject', 'No subject')[:50]}, read_full={read_full}")
         sender = message.get("sender", "Unknown sender")
         subject = message.get("subject", "No subject")
         date = message.get("date", "Unknown date") 
@@ -384,6 +395,7 @@ class GmailFunctionHandler:
     
     def extract_sender_name(self, sender: str) -> str:
         """Extract clean sender name from email field"""
+        logger.debug(f"extract_sender_name called with params: sender={sender}")
         if not sender or sender == "Unknown sender":
             return "Unknown sender"
         
@@ -409,6 +421,7 @@ class GmailFunctionHandler:
     
     def format_date_for_voice(self, date_str: str) -> str:
         """Convert email date to natural voice format"""
+        logger.debug(f"format_date_for_voice called with params: date_str={date_str}")
         if not date_str or date_str == "Unknown date":
             return "unknown date"
         
@@ -443,7 +456,7 @@ class GmailFunctionHandler:
                 # For older emails, use readable date
                 return parsed_time.strftime("%B %d, %Y")
         except Exception as e:
-            print(f"Date parsing error: {e}")
+            logger.warning(f"Date parsing error: {e}")
             # If parsing fails, try simple fallback
             try:
                 # Try to extract just the readable part
@@ -459,6 +472,7 @@ class GmailFunctionHandler:
         Format text content for natural voice delivery.
         Content is already HTML-cleaned by GmailService.
         """
+        logger.debug(f"format_content_for_voice called with content length: {len(content) if content else 0}")
         if not content:
             return ""
         
@@ -537,6 +551,7 @@ class GmailFunctionHandler:
     
     def create_message_summary(self, message: Dict[str, Any]) -> str:
         """Create a simple summary of the message"""
+        logger.debug(f"create_message_summary called with params: message_id={message.get('id', 'unknown')}, subject={message.get('subject', 'No subject')[:50]}")
         subject = message.get("subject", "No subject")
         sender = message.get("sender", "Unknown")
         body = message.get("body", message.get("snippet", ""))  # Body already cleaned by GmailService

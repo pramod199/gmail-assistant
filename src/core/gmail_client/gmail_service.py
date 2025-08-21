@@ -1,9 +1,12 @@
 from typing import Optional, Any, List, Dict
 import base64
+import logging
 from email.message import EmailMessage
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
+
+logger = logging.getLogger(__name__)
 
 
 class GmailService:
@@ -28,10 +31,10 @@ class GmailService:
             service.users().getProfile(userId="me").execute()
             return True
         except HttpError as error:
-            print(f"Gmail API connection failed: {error}")
+            logger.error(f"Gmail API connection failed: {error}")
             return False
         except Exception as error:
-            print(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error: {error}")
             return False
     
     def get_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> List[Dict[str, Any]]:
@@ -49,8 +52,8 @@ class GmailService:
     
     def search_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
         try:
-            print("GMAIL API CALL - List Messages")
-            print(f"Request query: '{query}', max_results: {max_results}")
+            logger.info("GMAIL API CALL - List Messages")
+            logger.info(f"Request query: '{query}', max_results: {max_results}")
             
             service = self.get_service()
             request_params = {
@@ -65,17 +68,17 @@ class GmailService:
             result = service.users().messages().list(**request_params).execute()
             
             messages = result.get("messages", [])
-            print(f"GMAIL RESPONSE: Found {len(messages)} message IDs")
+            logger.info(f"GMAIL RESPONSE: Found {len(messages)} message IDs")
             
             detailed_messages = []
             
             for i, msg in enumerate(messages, 1):
-                print(f"Fetching message {i}/{len(messages)}: {msg['id']}")
+                logger.debug(f"Fetching message {i}/{len(messages)}: {msg['id']}")
                 details = self.get_message_details(msg["id"])
                 if details:
                     detailed_messages.append(details)
             
-            print(f"Retrieved {len(detailed_messages)} complete messages")
+            logger.info(f"Retrieved {len(detailed_messages)} complete messages")
             
             # Return both messages and pagination info
             return {
@@ -85,15 +88,15 @@ class GmailService:
             }
             
         except HttpError as error:
-            print(f"ERROR GMAIL API: {error}")
+            logger.error(f"ERROR GMAIL API: {error}")
             return {"messages": [], "next_page_token": None, "result_size_estimate": 0}
         except Exception as error:
-            print(f"ERROR Unexpected: {error}")
+            logger.error(f"ERROR Unexpected: {error}")
             return {"messages": [], "next_page_token": None, "result_size_estimate": 0}
     
     def get_message_details(self, message_id: str) -> Optional[Dict[str, Any]]:
         try:
-            print(f"GMAIL API CALL - Get Message Details: {message_id}")
+            logger.debug(f"GMAIL API CALL - Get Message Details: {message_id}")
             
             service = self.get_service()
             message = service.users().messages().get(
@@ -103,15 +106,15 @@ class GmailService:
             ).execute()
             
             parsed = self._parse_message(message)
-            print(f"GMAIL RESPONSE: Parsed message - Subject: {parsed.get('subject', 'No subject')[:50]}")
+            logger.debug(f"GMAIL RESPONSE: Parsed message - Subject: {parsed.get('subject', 'No subject')[:50]}")
             
             return parsed
             
         except HttpError as error:
-            print(f"ERROR GMAIL API get message: {error}")
+            logger.error(f"ERROR GMAIL API get message: {error}")
             return None
         except Exception as error:
-            print(f"ERROR Unexpected get message: {error}")
+            logger.error(f"ERROR Unexpected get message: {error}")
             return None
     
     def mark_as_read(self, message_ids: List[str]) -> bool:
@@ -128,10 +131,10 @@ class GmailService:
             return True
             
         except HttpError as error:
-            print(f"Error marking messages as read: {error}")
+            logger.error(f"Error marking messages as read: {error}")
             return False
         except Exception as error:
-            print(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error: {error}")
             return False
     
     def create_draft(self, to: str, subject: str, body: str) -> Optional[str]:
@@ -155,10 +158,10 @@ class GmailService:
             return draft.get("id")
             
         except HttpError as error:
-            print(f"Error creating draft: {error}")
+            logger.error(f"Error creating draft: {error}")
             return None
         except Exception as error:
-            print(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error: {error}")
             return None
     
     def get_drafts(self, max_results: int = 10) -> List[Dict[str, Any]]:
@@ -183,10 +186,10 @@ class GmailService:
             return detailed_drafts
             
         except HttpError as error:
-            print(f"Error getting drafts: {error}")
+            logger.error(f"Error getting drafts: {error}")
             return []
         except Exception as error:
-            print(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error: {error}")
             return []
     
     def get_draft_by_id(self, draft_id: str) -> Optional[Dict[str, Any]]:
@@ -215,10 +218,10 @@ class GmailService:
             return parsed
             
         except HttpError as error:
-            print(f"Error getting draft: {error}")
+            logger.error(f"Error getting draft: {error}")
             return None
         except Exception as error:
-            print(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error: {error}")
             return None
     
     def send_draft(self, draft_id: str) -> bool:
@@ -234,10 +237,10 @@ class GmailService:
             return True
             
         except HttpError as error:
-            print(f"Error sending draft: {error}")
+            logger.error(f"Error sending draft: {error}")
             return False
         except Exception as error:
-            print(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error: {error}")
             return False
     
     def delete_draft(self, draft_id: str) -> bool:
@@ -253,10 +256,10 @@ class GmailService:
             return True
             
         except HttpError as error:
-            print(f"Error deleting draft: {error}")
+            logger.error(f"Error deleting draft: {error}")
             return False
         except Exception as error:
-            print(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error: {error}")
             return False
     
     def _parse_message(self, message: Dict[str, Any]) -> Dict[str, Any]:

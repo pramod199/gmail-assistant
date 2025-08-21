@@ -128,8 +128,8 @@ class VoiceWebSocketHandler:
     async def _start_voice_session(self, websocket: WebSocket, user_id: str, connection: Dict[str, Any]):
         """Start a new Gemini Live voice session"""
         try:
-            gemini_client = connection["gemini_client"]
-            function_handler = connection["function_handler"]
+            gemini_client: GeminiLiveClient = connection["gemini_client"]
+            function_handler: GmailFunctionHandler = connection["function_handler"]
             
             # Get Gemini Live session context manager
             session_context = await gemini_client.create_session(
@@ -185,7 +185,7 @@ class VoiceWebSocketHandler:
             audio_bytes = base64.b64decode(audio_data)
             
             # Send to Gemini Live API
-            gemini_client = connection["gemini_client"]
+            gemini_client: GeminiLiveClient = connection["gemini_client"]
             await gemini_client.send_audio_chunk(gemini_session, audio_bytes, mime_type)
             
         except Exception as e:
@@ -275,7 +275,7 @@ class VoiceWebSocketHandler:
         
         try:
             gemini_session = connection["gemini_session"]
-            gemini_client = connection["gemini_client"]
+            gemini_client: GeminiLiveClient = connection["gemini_client"]
             
             if not gemini_session or not gemini_client:
                 raise Exception("Invalid Gemini session or client")
