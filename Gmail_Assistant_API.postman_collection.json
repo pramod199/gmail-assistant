@@ -329,6 +329,32 @@
 			]
 		},
 		{
+			"name": "Voice Assistant",
+			"item": [
+				{
+					"name": "Voice WebSocket Connection",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "ws://localhost:8000/api/voice?token={{firebase_token}}",
+							"protocol": "ws",
+							"host": ["localhost"],
+							"port": "8000",
+							"path": ["api", "voice"],
+							"query": [
+								{
+									"key": "token",
+									"value": "{{firebase_token}}"
+								}
+							]
+						},
+						"description": "WebSocket endpoint for real-time voice interaction with the Gmail assistant. Requires Firebase authentication token as query parameter.\n\nMessage Types:\n- start_voice_session: Initialize Gemini Live session\n- audio_chunk: Send base64 encoded audio data\n- end_voice_session: Terminate current session\n\nResponse Types:\n- voice_session_started: Session ready for audio\n- audio_response: Base64 encoded audio response\n- function_executed: Gmail operation completed\n- voice_session_recovered: Session automatically restarted\n- error: Error message with details"
+					}
+				}
+			]
+		},
+		{
 			"name": "Natural Language Examples",
 			"item": [
 				{

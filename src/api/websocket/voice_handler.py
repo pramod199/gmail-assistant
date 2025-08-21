@@ -420,17 +420,5 @@ class VoiceWebSocketHandler:
     
     def _create_gmail_service(self, credentials):
         """Create Gmail service with user credentials"""
-        # Create a temporary auth object with user credentials
-        class UserAuth:
-            def __init__(self, creds):
-                self._credentials = creds
-            
-            def authenticate(self):
-                """Return stored credentials - required by GmailService"""
-                return self._credentials
-            
-            def get_credentials(self):
-                return self._credentials
-        
-        user_auth = UserAuth(credentials)
-        return GmailService(user_auth)
+    
+        return GmailService(credentials)

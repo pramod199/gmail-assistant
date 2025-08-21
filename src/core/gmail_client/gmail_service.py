@@ -5,18 +5,21 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
 
-from ..auth.gmail_auth import GmailAuth
-
 
 class GmailService:
-    def __init__(self, auth: Optional[GmailAuth] = None):
-        self.auth = auth or GmailAuth()
+    def __init__(self, credentials: Credentials):
+        """
+        Initialize Gmail service with user credentials
+        
+        Args:
+            credentials: Google OAuth2 credentials for the user
+        """
+        self.credentials = credentials
         self._service = None
     
     def get_service(self):
         if not self._service:
-            credentials = self.auth.authenticate()
-            self._service = build("gmail", "v1", credentials=credentials)
+            self._service = build("gmail", "v1", credentials=self.credentials)
         return self._service
     
     def test_connection(self) -> bool:

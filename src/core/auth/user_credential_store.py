@@ -29,7 +29,7 @@ class UserCredentialStore:
     
     def store_credentials(self, user_id: str, credentials: Credentials) -> None:
         """
-        Store user credentials in Redis
+        Store user credentials in Redis using Google's built-in serialization
         
         Args:
             user_id: Firebase user ID
@@ -37,22 +37,14 @@ class UserCredentialStore:
         """
         key = self._get_key(user_id)
         
-        # Convert credentials to JSON
-        cred_data = {
-            "token": credentials.token,
-            "refresh_token": credentials.refresh_token,
-            "id_token": credentials.id_token,
-            "token_uri": credentials.token_uri,
-            "client_id": credentials.client_id,
-            "client_secret": credentials.client_secret,
-            "scopes": credentials.scopes
-        }
+        # Use Google's built-in serialization - handles all fields automatically
+        credentials_json = credentials.to_json()
         
-        # Store with 7 day expiration (refresh tokens typically last longer)
+        # Store with 30 day expiration (refresh tokens typically last longer)
         self.redis_client.setex(
             key, 
-            7 * 24 * 60 * 60,  # 7 days in seconds
-            json.dumps(cred_data)
+            30 * 24 * 60 * 60,  # 30 days in seconds
+            credentials_json
         )
     
     def get_credentials(self, user_id: str) -> Optional[Credentials]:
@@ -73,18 +65,11 @@ class UserCredentialStore:
             return None
         
         try:
+            # Parse JSON data
             cred_data = json.loads(cred_json)
             
-            # Reconstruct credentials object
-            credentials = Credentials(
-                token=cred_data.get("token"),
-                refresh_token=cred_data.get("refresh_token"),
-                id_token=cred_data.get("id_token"),
-                token_uri=cred_data.get("token_uri"),
-                client_id=cred_data.get("client_id"),
-                client_secret=cred_data.get("client_secret"),
-                scopes=cred_data.get("scopes")
-            )
+            # Use Google's built-in deserialization - handles all fields automatically
+            credentials = Credentials.from_authorized_user_info(cred_data)
             
             # Check if credentials are valid and refresh if needed
             if not credentials.valid:
