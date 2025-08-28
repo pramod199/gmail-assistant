@@ -7,18 +7,18 @@ from ...config.settings import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
 class RedisClient:
     """Simple Redis client for session management"""
     
-    def __init__(self):
+    def __init__(self, db: Optional[int] = None):
         self.client = redis.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
-            db=REDIS_DB,
+            db=db if db is not None else REDIS_DB,
             password=REDIS_PASSWORD,
             decode_responses=True
         )
         # Test connection
         try:
             self.client.ping()
-            print(f"✅ Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
+            print(f"✅ Connected to Redis at {REDIS_HOST}:{REDIS_PORT} (DB: {db if db is not None else REDIS_DB})")
         except Exception as e:
             print(f"❌ Redis connection failed: {e}")
             raise ConnectionError(f"Redis connection failed: {e}")
@@ -68,3 +68,38 @@ class RedisClient:
         except Exception as e:
             print(f"Redis hgetall error: {e}")
             return {}
+    
+    def get(self, key: str) -> Optional[str]:
+        """Get string value by key"""
+        try:
+            return self.client.get(key)
+        except Exception as e:
+            print(f"Redis get error: {e}")
+            return None
+    
+    def set(self, key: str, value: str, ex: Optional[int] = None) -> bool:
+        """Set string value with optional expiration"""
+        try:
+            result = self.client.set(key, value, ex=ex)
+            return result is True
+        except Exception as e:
+            print(f"Redis set error: {e}")
+            return False
+    
+    def setex(self, key: str, value: str, time: int) -> bool:
+        """Set string value with expiration time"""
+        try:
+            result = self.client.setex(key, time, value)
+            return result is True
+        except Exception as e:
+            print(f"Redis setex error: {e}")
+            return False
+    
+    def delete(self, key: str) -> bool:
+        """Delete key"""
+        try:
+            result = self.client.delete(key)
+            return result > 0
+        except Exception as e:
+            print(f"Redis delete error: {e}")
+            return False

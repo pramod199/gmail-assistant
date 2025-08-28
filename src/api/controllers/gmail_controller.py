@@ -139,7 +139,7 @@ async def get_messages(
         gmail_service = _get_user_gmail_service(user_id)
         
         # Get messages
-        messages = gmail_service.get_messages(
+        messages = await gmail_service.get_messages(
             max_results=max_results,
             query=query or ""
         )
@@ -179,7 +179,7 @@ async def get_message_content(
         user_id = user["user_id"]
         gmail_service = _get_user_gmail_service(user_id)
         
-        message = gmail_service.get_message_by_id(message_id)
+        message = await gmail_service.get_message_by_id(message_id)
         
         if not message:
             raise HTTPException(
@@ -210,7 +210,7 @@ async def mark_message_read(
         user_id = user["user_id"]
         gmail_service = _get_user_gmail_service(user_id)
         
-        success = gmail_service.mark_as_read([message_id])
+        success = await gmail_service.mark_as_read([message_id])
         
         if not success:
             raise HTTPException(
@@ -241,7 +241,7 @@ async def create_draft(
         user_id = user["user_id"]
         gmail_service = _get_user_gmail_service(user_id)
         
-        draft_id = gmail_service.create_draft(
+        draft_id = await gmail_service.create_draft(
             to=draft.to,
             subject=draft.subject,
             body=draft.body
@@ -279,7 +279,7 @@ async def get_drafts(
         user_id = user["user_id"]
         gmail_service = _get_user_gmail_service(user_id)
         
-        drafts = gmail_service.get_drafts(max_results=max_results)
+        drafts = await gmail_service.get_drafts(max_results=max_results)
         
         # Convert to response format
         draft_responses = []
@@ -328,7 +328,7 @@ async def get_draft_details(
         user_id = user["user_id"]
         gmail_service = _get_user_gmail_service(user_id)
         
-        draft = gmail_service.get_draft_by_id(draft_id)
+        draft = await gmail_service.get_draft_by_id(draft_id)
         
         if not draft:
             raise HTTPException(
@@ -359,7 +359,7 @@ async def send_draft(
         user_id = user["user_id"]
         gmail_service = _get_user_gmail_service(user_id)
         
-        success = gmail_service.send_draft(draft_id)
+        success = await gmail_service.send_draft(draft_id)
         
         if not success:
             raise HTTPException(
@@ -390,7 +390,7 @@ async def delete_draft(
         user_id = user["user_id"]
         gmail_service = _get_user_gmail_service(user_id)
         
-        success = gmail_service.delete_draft(draft_id)
+        success = await gmail_service.delete_draft(draft_id)
         
         if not success:
             raise HTTPException(

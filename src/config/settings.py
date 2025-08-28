@@ -39,6 +39,11 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+
+# Redis Database Selection
+REDIS_DB_SESSIONS = int(os.getenv("REDIS_DB_SESSIONS", "0"))
+REDIS_DB_DRAFTS = int(os.getenv("REDIS_DB_DRAFTS", "0"))
+REDIS_DB_CREDENTIALS = int(os.getenv("REDIS_DB_CREDENTIALS", "0"))
 NAVIGATION_KEY_PREFIX = "gmail_assistant:navigation"
 NAVIGATION_TTL = 7 * 24 * 3600  # 7 days in seconds
 

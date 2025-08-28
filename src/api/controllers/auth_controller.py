@@ -87,7 +87,7 @@ async def gmail_callback(request: Request, code: str = None, state: str = None, 
         user_id = _validate_state(state)
         
         # Create flow and exchange code for credentials
-        flow = _create_oauth_flow(request)
+        flow = _create_oauth_flow()
         flow.fetch_token(code=code)
         
         credentials = flow.credentials

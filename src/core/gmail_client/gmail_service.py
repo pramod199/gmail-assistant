@@ -37,20 +37,20 @@ class GmailService:
             logger.error(f"Unexpected error: {error}")
             return False
     
-    def get_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> List[Dict[str, Any]]:
+    async def get_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> List[Dict[str, Any]]:
         """
         Convenience method for API controllers - returns just the message list
         """
-        result = self.search_messages(query, max_results, page_token)
+        result = await self.search_messages(query, max_results, page_token)
         return result.get("messages", [])
     
-    def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
+    async def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
         """
         Convenience method for API controllers - get single message by ID
         """
-        return self.get_message_details(message_id)
+        return await self.get_message_details(message_id)
     
-    def search_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
+    async def search_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
         try:
             logger.info("GMAIL API CALL - List Messages")
             logger.info(f"Request query: '{query}', max_results: {max_results}")
@@ -74,7 +74,7 @@ class GmailService:
             
             for i, msg in enumerate(messages, 1):
                 logger.debug(f"Fetching message {i}/{len(messages)}: {msg['id']}")
-                details = self.get_message_details(msg["id"])
+                details = await self.get_message_details(msg["id"])
                 if details:
                     detailed_messages.append(details)
             
@@ -94,7 +94,7 @@ class GmailService:
             logger.error(f"ERROR Unexpected: {error}")
             return {"messages": [], "next_page_token": None, "result_size_estimate": 0}
     
-    def get_message_details(self, message_id: str) -> Optional[Dict[str, Any]]:
+    async def get_message_details(self, message_id: str) -> Optional[Dict[str, Any]]:
         try:
             logger.debug(f"GMAIL API CALL - Get Message Details: {message_id}")
             
@@ -117,7 +117,7 @@ class GmailService:
             logger.error(f"ERROR Unexpected get message: {error}")
             return None
     
-    def mark_as_read(self, message_ids: List[str]) -> bool:
+    async def mark_as_read(self, message_ids: List[str]) -> bool:
         try:
             service = self.get_service()
             
@@ -137,7 +137,7 @@ class GmailService:
             logger.error(f"Unexpected error: {error}")
             return False
     
-    def create_draft(self, to: str, subject: str, body: str) -> Optional[str]:
+    async def create_draft(self, to: str, subject: str, body: str) -> Optional[str]:
         try:
             service = self.get_service()
             
@@ -164,7 +164,88 @@ class GmailService:
             logger.error(f"Unexpected error: {error}")
             return None
     
-    def get_drafts(self, max_results: int = 10) -> List[Dict[str, Any]]:
+    async def create_reply_draft(self, original_message: Dict[str, Any], reply_content: str, reply_recipient: str) -> Optional[str]:
+        """Create a reply draft with proper threading headers"""
+        try:
+            service = self.get_service()
+            
+            # Extract threading information from original message
+            original_message_id = original_message.get("message_id", "")
+            original_references = original_message.get("references", "").strip()
+            thread_id = original_message.get("thread_id")
+            original_subject = original_message.get("subject", "")
+            
+            # Build proper reply subject (add Re: if not present)
+            reply_subject = original_subject
+            if original_subject and not original_subject.lower().startswith("re:"):
+                reply_subject = f"Re: {original_subject}"
+            
+            # Build References header (original references + original message ID)
+            reply_references = original_references
+            if original_message_id:
+                if reply_references:
+                    reply_references += f" <{original_message_id}>"
+                else:
+                    reply_references = f"<{original_message_id}>"
+            
+            # Format reply body with original message
+            formatted_reply_body = self._format_reply_body(reply_content, original_message)
+            
+            # Create email message with threading headers
+            message = EmailMessage()
+            message.set_content(formatted_reply_body)
+            message["To"] = reply_recipient
+            message["Subject"] = reply_subject
+            
+            # Add threading headers for proper Gmail threading
+            if original_message_id:
+                message["In-Reply-To"] = f"<{original_message_id}>"
+            if reply_references:
+                message["References"] = reply_references
+            
+            # Encode message
+            encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            
+            # Create draft with threading info
+            create_message = {"message": {"raw": encoded_message}}
+            if thread_id:
+                create_message["threadId"] = thread_id
+            
+            draft = service.users().drafts().create(
+                userId="me",
+                body=create_message
+            ).execute()
+            
+            return draft.get("id")
+            
+        except HttpError as error:
+            logger.error(f"Error creating reply draft: {error}")
+            return None
+        except Exception as error:
+            logger.error(f"Unexpected error creating reply: {error}")
+            return None
+    
+    def _format_reply_body(self, reply_content: str, original_message: Dict[str, Any]) -> str:
+        """Format reply body with original message in standard Gmail format"""
+        sender = original_message.get("sender", "Unknown sender")
+        date = original_message.get("date", "Unknown date")
+        original_body = original_message.get("body", "")
+        
+        # Extract sender name for cleaner display
+        sender_name = sender.split("<")[0].strip().strip('"') if "<" in sender else sender
+        
+        # Format original message with > prefix on each line
+        quoted_body = ""
+        if original_body:
+            quoted_lines = original_body.split('\n')
+            quoted_body = '\n'.join(f"> {line}" for line in quoted_lines)
+        
+        # Standard Gmail reply format
+        reply_body = f"{reply_content}\n\nOn {date}, {sender_name} wrote:\n{quoted_body}"
+        
+        return reply_body
+    
+    async def get_drafts(self, max_results: int = 10) -> List[Dict[str, Any]]:
         """Get user's drafts"""
         try:
             service = self.get_service()
@@ -179,7 +260,7 @@ class GmailService:
             detailed_drafts = []
             
             for draft in drafts:
-                draft_detail = self.get_draft_by_id(draft["id"])
+                draft_detail = await self.get_draft_by_id(draft["id"])
                 if draft_detail:
                     detailed_drafts.append(draft_detail)
             
@@ -192,7 +273,7 @@ class GmailService:
             logger.error(f"Unexpected error: {error}")
             return []
     
-    def get_draft_by_id(self, draft_id: str) -> Optional[Dict[str, Any]]:
+    async def get_draft_by_id(self, draft_id: str) -> Optional[Dict[str, Any]]:
         """Get draft by ID"""
         try:
             service = self.get_service()
@@ -224,7 +305,7 @@ class GmailService:
             logger.error(f"Unexpected error: {error}")
             return None
     
-    def send_draft(self, draft_id: str) -> bool:
+    async def send_draft(self, draft_id: str) -> bool:
         """Send a draft"""
         try:
             service = self.get_service()
@@ -243,7 +324,7 @@ class GmailService:
             logger.error(f"Unexpected error: {error}")
             return False
     
-    def delete_draft(self, draft_id: str) -> bool:
+    async def delete_draft(self, draft_id: str) -> bool:
         """Delete a draft"""
         try:
             service = self.get_service()
@@ -268,6 +349,9 @@ class GmailService:
         subject = ""
         sender = ""
         date = ""
+        message_id = ""
+        references = ""
+        in_reply_to = ""
         
         for header in headers:
             name = header.get("name", "").lower()
@@ -279,6 +363,12 @@ class GmailService:
                 sender = value
             elif name == "date":
                 date = value
+            elif name == "message-id":
+                message_id = value
+            elif name == "references":
+                references = value
+            elif name == "in-reply-to":
+                in_reply_to = value
         
         body = self._extract_body(message.get("payload", {}))
         
@@ -290,7 +380,10 @@ class GmailService:
             "date": date,
             "body": body,
             "snippet": message.get("snippet", ""),
-            "labels": message.get("labelIds", [])
+            "labels": message.get("labelIds", []),
+            "message_id": message_id,
+            "references": references,
+            "in_reply_to": in_reply_to
         }
     
     def _extract_body(self, payload: Dict[str, Any]) -> str:
