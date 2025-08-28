@@ -49,11 +49,48 @@ class GmailFunctionHandler:
         
         return ""  # Return empty if no valid email found
     
+    def _cleanup_email(self, email: str) -> str:
+        """Clean up email address from voice input issues"""
+        if not email:
+            return email
+            
+        # Remove all spaces (common voice parsing issue)
+        cleaned = email.replace(" ", "")
+        
+        # Convert to lowercase (voice often capitalizes incorrectly)
+        cleaned = cleaned.lower()
+        
+        # Only handle space and capitalization issues
+        
+        return cleaned
+    
     def _validate_email(self, email: str) -> bool:
-        """Validate email format"""
+        """Validate email format - requires domain with dot (like Gmail)"""
         import re
-        pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        pattern = r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
         return bool(re.match(pattern, email))
+    
+    def _validate_and_cleanup_email(self, raw_email: str) -> tuple[str, bool, str]:
+        """
+        Validate and cleanup email address, return (cleaned_email, is_valid, error_message)
+        """
+        if not raw_email:
+            return "", False, "Email address is required"
+        
+        # First cleanup common voice parsing issues
+        cleaned_email = self._cleanup_email(raw_email)
+        
+        # Check if cleaned version is valid
+        if self._validate_email(cleaned_email):
+            return cleaned_email, True, ""
+        
+        # If still invalid, provide helpful error message
+        if "@" not in cleaned_email:
+            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Missing @ symbol. Please say the email address clearly, like 'john dot smith at gmail dot com'"
+        elif "." not in cleaned_email.split("@")[1]:
+            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Missing domain extension. Please include '.com', '.org', etc."
+        else:
+            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Please speak the email address clearly and slowly, like 'sarita kumari dot nitap at gmail dot com'"
     
     async def _resolve_reply_recipient(self, recipient_hint: str) -> Optional[str]:
         """Resolve recipient for reply drafts using current message context"""
@@ -416,9 +453,13 @@ class GmailFunctionHandler:
                 if not all([recipient, subject]):
                     return {"error": "Recipient and subject are required for new drafts"}
                 
-                # Validate email format
-                if not self._validate_email(recipient):
-                    return {"error": f"Invalid email address: '{recipient}'. Please provide a valid email address like 'name@domain.com'"}
+                # Validate and cleanup email format
+                cleaned_recipient, is_valid, error_msg = self._validate_and_cleanup_email(recipient)
+                if not is_valid:
+                    return {"error": error_msg}
+                
+                # Use cleaned email
+                recipient = cleaned_recipient
                 
                 # Store draft in Redis temporarily
                 draft_data = {
@@ -429,10 +470,20 @@ class GmailFunctionHandler:
                     "status": "editing"
                 }
                 
+                logger.info(f"Attempting to store draft for user {self.user_id}")
+                logger.debug(f"Draft data: {draft_data}")
                 success = self.session.store_draft(self.user_id, draft_data)
+                logger.info(f"Draft storage result: {success}")
+                
                 if success:
+                    # Verify draft was actually stored
+                    stored_draft = self.session.get_draft(self.user_id)
+                    logger.info(f"Verification - draft retrieved: {stored_draft is not None}")
+                    if stored_draft:
+                        logger.debug(f"Stored draft content: recipient={stored_draft.get('recipient')}, subject={stored_draft.get('subject')}")
                     return {"response": f"Draft created. To: {recipient}, Subject: {subject}. Say 'send the draft' when ready."}
                 else:
+                    logger.error(f"Failed to store draft in Redis for user {self.user_id}")
                     return {"error": "Failed to create draft"}
         
         elif action == "send":
