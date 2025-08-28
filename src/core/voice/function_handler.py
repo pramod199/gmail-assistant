@@ -17,6 +17,61 @@ class GmailFunctionHandler:
         self.session = session_manager
         self.user_id = user_id
     
+    async def _ensure_session_initialized(self) -> Optional[Dict[str, Any]]:
+        """Ensure user has an initialized session with message queue, create one if needed"""
+        session_state = self.session.get_session_state(self.user_id)
+        
+        if not session_state or not session_state.get("message_queue"):
+            logger.info(f"No session found for user {self.user_id}, initializing with read_messages")
+            await self.read_messages()  # This will create the session
+            session_state = self.session.get_session_state(self.user_id)
+            
+            if not session_state or not session_state.get("message_queue"):
+                return None
+        
+        return session_state
+    
+    def _extract_email_from_sender(self, sender_string: str) -> str:
+        """Extract actual email address from sender field"""
+        import re
+        if not sender_string:
+            return ""
+        
+        # Handle format: "Name <email@example.com>"
+        email_match = re.search(r'<([^>]+)>', sender_string)
+        if email_match:
+            return email_match.group(1)
+        
+        # Handle format: just "email@example.com"
+        email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', sender_string)
+        if email_match:
+            return email_match.group(0)
+        
+        return ""  # Return empty if no valid email found
+    
+    def _validate_email(self, email: str) -> bool:
+        """Validate email format"""
+        import re
+        pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        return bool(re.match(pattern, email))
+    
+    async def _resolve_reply_recipient(self, recipient_hint: str) -> Optional[str]:
+        """Resolve recipient for reply drafts using current message context"""
+        session_state = await self._ensure_session_initialized()
+        if not session_state or not session_state.get("current_message_id"):
+            return None  # No current message context for reply
+        
+        current_message_id = session_state["current_message_id"]
+        message = await self.gmail.get_message_by_id(current_message_id)
+        
+        if message and message.get("sender"):
+            extracted_email = self._extract_email_from_sender(message["sender"])
+            if self._validate_email(extracted_email):
+                logger.info(f"Resolved reply recipient '{recipient_hint}' to email '{extracted_email}' from current message")
+                return extracted_email
+        
+        return None
+    
     async def handle_function_call(self, function_call: Dict[str, Any]) -> Dict[str, Any]:
         """Route function calls to appropriate handlers"""
         function_name = function_call.get("name")
@@ -76,7 +131,7 @@ class GmailFunctionHandler:
             query = "is:unread"  # Default
         
         # Fetch messages using existing GmailService (already handles HTML cleaning, etc.)
-        result = self.gmail.search_messages(query=query, max_results=max_results)
+        result = await self.gmail.search_messages(query=query, max_results=max_results)
         messages = result.get("messages", [])
         next_page_token = result.get("next_page_token")
         
@@ -135,10 +190,9 @@ class GmailFunctionHandler:
     async def navigate_messages(self, direction: str, search_criteria: Optional[Dict] = None) -> Dict[str, Any]:
         """Navigate through messages"""
         logger.debug(f"navigate_messages called with params: direction={direction}, search_criteria={search_criteria}")
-        session_state = self.session.get_session_state(self.user_id)
-        
-        if not session_state or not session_state.get("message_queue"):
-            return {"error": "No messages loaded. Please read messages first."}
+        session_state = await self._ensure_session_initialized()
+        if not session_state:
+            return {"error": "Failed to initialize message session"}
         
         message_queue = session_state["message_queue"]
         current_index = session_state.get("current_index", 0)
@@ -171,7 +225,7 @@ class GmailFunctionHandler:
         
         # Get the message at new index (already cleaned by GmailService)
         message_id = message_queue[new_index]
-        message = self.gmail.get_message_by_id(message_id)
+        message = await self.gmail.get_message_by_id(message_id)
         
         if not message:
             return {"error": "Message not found"}
@@ -202,7 +256,7 @@ class GmailFunctionHandler:
             return {"response": "No more messages available."}
         
         # Fetch next page using current query
-        result = self.gmail.search_messages(query=current_query, max_results=10, page_token=next_page_token)
+        result = await self.gmail.search_messages(query=current_query, max_results=10, page_token=next_page_token)
         new_messages = result.get("messages", [])
         new_next_token = result.get("next_page_token")
         
@@ -238,10 +292,9 @@ class GmailFunctionHandler:
     async def summarize_message(self, message_index: Optional[int] = None) -> Dict[str, Any]:
         """Summarize current or specified message"""
         logger.debug(f"summarize_message called with params: message_index={message_index}")
-        session_state = self.session.get_session_state(self.user_id)
-        
-        if not session_state or not session_state.get("message_queue"):
-            return {"error": "No messages loaded. Please read messages first."}
+        session_state = await self._ensure_session_initialized()
+        if not session_state:
+            return {"error": "Failed to initialize message session"}
         
         # Determine which message to summarize
         if message_index is not None:
@@ -255,7 +308,7 @@ class GmailFunctionHandler:
                 return {"error": "No current message to summarize"}
         
         # Get message details (already cleaned by GmailService)
-        message = self.gmail.get_message_by_id(message_id)
+        message = await self.gmail.get_message_by_id(message_id)
         if not message:
             return {"error": "Message not found"}
         
@@ -271,10 +324,9 @@ class GmailFunctionHandler:
     async def mark_message(self, action: str, message_index: Optional[int] = None) -> Dict[str, Any]:
         """Mark message with specified action"""
         logger.debug(f"mark_message called with params: action={action}, message_index={message_index}")
-        session_state = self.session.get_session_state(self.user_id)
-        
-        if not session_state or not session_state.get("message_queue"):
-            return {"error": "No messages loaded. Please read messages first."}
+        session_state = await self._ensure_session_initialized()
+        if not session_state:
+            return {"error": "Failed to initialize message session"}
         
         # Determine which message to mark
         if message_index is not None:
@@ -292,7 +344,7 @@ class GmailFunctionHandler:
         action_msg = ""
         
         if action == "read":
-            success = self.gmail.mark_as_read([message_id])
+            success = await self.gmail.mark_as_read([message_id])
             action_msg = "marked as read"
         elif action == "unread":
             # TODO: Implement mark as unread in gmail_service
@@ -312,47 +364,113 @@ class GmailFunctionHandler:
         logger.debug(f"draft_email called with params: action={action}, kwargs={kwargs}")
         
         if action == "create":
-            recipient = kwargs.get("recipient")
-            subject = kwargs.get("subject") 
             content = kwargs.get("content")
+            reply_to = kwargs.get("reply_to", False)  # Default to False if not specified
             
-            if not all([recipient, subject, content]):
-                return {"error": "Recipient, subject, and content are required for creating draft"}
+            # Content is always required
+            if not content:
+                return {"error": "Content is required for creating draft"}
             
-            # Store draft in Redis temporarily
-            draft_data = {
-                "recipient": recipient,
-                "subject": subject,
-                "content": content,
-                "status": "editing"
-            }
-            
-            success = self.session.store_draft(self.user_id, draft_data)
-            if success:
-                return {"response": f"Draft created. To: {recipient}, Subject: {subject}. Say 'send the draft' when ready."}
+            if reply_to:
+                # This is a reply - use current message context (cached data)
+                session_state = await self._ensure_session_initialized()
+                if not session_state or not session_state.get("current_message_id"):
+                    return {"error": "Cannot create reply - no current message context"}
+                
+                current_message_id = session_state["current_message_id"]
+                current_message = await self.gmail.get_message_by_id(current_message_id)
+                
+                if not current_message or not current_message.get("sender"):
+                    return {"error": "Cannot create reply - unable to access current message"}
+                
+                # Extract recipient email from current message sender
+                final_recipient = self._extract_email_from_sender(current_message["sender"])
+                if not self._validate_email(final_recipient):
+                    return {"error": "Cannot create reply - invalid sender email in current message"}
+                
+                # Store reply draft in Redis with context info
+                reply_subject = current_message.get("subject", "")
+                if not reply_subject.lower().startswith("re:"):
+                    reply_subject = f"Re: {reply_subject}"
+                
+                draft_data = {
+                    "recipient": final_recipient,
+                    "subject": reply_subject,
+                    "content": content,
+                    "reply_to": True,
+                    "original_message_id": current_message_id,
+                    "status": "editing"
+                }
+                
+                success = self.session.store_draft(self.user_id, draft_data)
+                if success:
+                    return {"response": f"Reply draft created. To: {final_recipient}, Subject: {reply_subject}. Say 'send the draft' when ready."}
+                else:
+                    return {"error": "Failed to create reply draft"}
+                    
             else:
-                return {"error": "Failed to create draft"}
+                # This is a new draft - validate all required parameters
+                recipient = kwargs.get("recipient")
+                subject = kwargs.get("subject")
+                
+                if not all([recipient, subject]):
+                    return {"error": "Recipient and subject are required for new drafts"}
+                
+                # Validate email format
+                if not self._validate_email(recipient):
+                    return {"error": f"Invalid email address: '{recipient}'. Please provide a valid email address like 'name@domain.com'"}
+                
+                # Store draft in Redis temporarily
+                draft_data = {
+                    "recipient": recipient,
+                    "subject": subject,
+                    "content": content,
+                    "reply_to": reply_to,
+                    "status": "editing"
+                }
+                
+                success = self.session.store_draft(self.user_id, draft_data)
+                if success:
+                    return {"response": f"Draft created. To: {recipient}, Subject: {subject}. Say 'send the draft' when ready."}
+                else:
+                    return {"error": "Failed to create draft"}
         
         elif action == "send":
             draft = self.session.get_draft(self.user_id)
             if not draft:
                 return {"error": "No draft found to send"}
             
-            # Create and send draft via Gmail
-            draft_id = self.gmail.create_draft(
-                to=draft["recipient"],
-                subject=draft["subject"],
-                body=draft["content"]
-            )
+            # Check if this is a reply draft or regular draft
+            is_reply = draft.get("reply_to", False)
+            
+            if is_reply:
+                # For reply drafts, get the original message for threading
+                original_message_id = draft.get("original_message_id")
+                if not original_message_id:
+                    return {"error": "Cannot send reply - missing original message reference"}
+                
+                original_message = await self.gmail.get_message_by_id(original_message_id)
+                if not original_message:
+                    return {"error": "Cannot send reply - unable to access original message"}
+                
+                # Create reply draft with threading
+                draft_id = await self.gmail.create_reply_draft(
+                    original_message, 
+                    draft["content"], 
+                    draft["recipient"]
+                )
+            else:
+                # Regular draft
+                draft_id = await self.gmail.create_draft(
+                    to=draft["recipient"],
+                    subject=draft["subject"],
+                    body=draft["content"]
+                )
             
             if draft_id:
-                # success = self.gmail.send_draft(draft_id)  # don't send in actual
-                # if success:
-                #     self.session.clear_draft(self.user_id)
-                #     return {"response": "Email sent successfully!"}
-                # else:
-                #     return {"error": "Failed to send email"}
-                return {"response": "Draft created successfully, please review from gmail!"}
+                # Clear the Redis draft since it's now created in Gmail
+                self.session.clear_draft(self.user_id)
+                return {"response": "Draft created successfully in Gmail, please review and send from Gmail!"}
             else:
                 return {"error": "Failed to create draft for sending"}
         

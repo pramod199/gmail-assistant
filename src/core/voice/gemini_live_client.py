@@ -122,9 +122,19 @@ class GeminiLiveClient:
                             "enum": ["create", "edit", "save_to_gmail", "send", "cancel"],
                             "description": "Draft action to perform"
                         },
-                        "recipient": {"type": "string", "description": "Email recipient"},
-                        "subject": {"type": "string", "description": "Email subject"},
-                        "content": {"type": "string", "description": "Email body content"},
+                        "recipient": {
+                            "type": "string", 
+                            "description": "Email recipient (required for new drafts, optional for replies)"
+                        },
+                        "subject": {
+                            "type": "string", 
+                            "description": "Email subject (required for new drafts, optional for replies)" 
+                        },
+                        "content": {"type": "string", "description": "Email body content (always required)"},
+                        "reply_to": {
+                            "type": "boolean", 
+                            "description": "True if replying to current message, False for new draft. Use true for commands like 'reply to this message', 'respond to this email', 'write back'. Use false for 'create new email', 'send email to someone'."
+                        },
                         "modifications": {"type": "string", "description": "Specific changes for editing"}
                     }
                 }
@@ -144,12 +154,33 @@ class GeminiLiveClient:
 5. Create and manage email drafts
 6. Search for specific messages by sender or topic
 
+IMPORTANT NAVIGATION RULES:
+- ALWAYS use the navigate_messages() function for ANY navigation request including:
+  * "next message", "previous message", "go to next", "go to previous" 
+  * "read my next message", "read my last message", "read the previous message"
+  * "first message", "last message"
+- For "read next/previous/first/last message" commands, prioritize navigate_messages() over read_messages()
+- NEVER assume there are no more messages - let the navigate_messages() function check the session state and pagination tokens
+- The navigate_messages() function will automatically fetch more messages if available using pagination
+- Do not give responses like "no more messages" or "you've reached the end" without calling navigate_messages() first
+
 Always provide natural, conversational responses. When reading emails, format content for voice delivery (convert timestamps to natural language, break long emails into digestible chunks).
 
 For "read my messages" commands:
 1. Fetch the messages
 2. Immediately read the first message aloud
 3. Let user know navigation options ("say next message to continue")
+
+For navigation commands ("next", "previous", etc.):
+1. ALWAYS call navigate_messages() function
+2. Let the function handle pagination and message availability
+3. Read the response from the function
+
+For draft/email commands:
+- Use reply_to=true for: "reply to this message", "respond to this email", "write back to them", "reply that..."
+- Use reply_to=false for: "create new email", "send email to [person]", "draft an email to..."
+- When reply_to=true, only provide content parameter - recipient and subject will be auto-populated from current message
+- When reply_to=false, all parameters (recipient, subject, content) are required
 
 Keep responses concise but informative. Ask for clarification when needed.""",
             "tools": [{"function_declarations": self.functions}]

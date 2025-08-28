@@ -1,8 +1,9 @@
 import json
-import redis
 from typing import Optional
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from ..session.redis_client import RedisClient
+from ...config.settings import REDIS_DB_CREDENTIALS
 
 
 class UserCredentialStore:
@@ -11,16 +12,8 @@ class UserCredentialStore:
     Stores credentials with automatic refresh handling
     """
     
-    def __init__(self, redis_host: str = None, redis_port: int = None, redis_db: int = None):
-        from ...config.settings import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
-        
-        self.redis_client = redis.Redis(
-            host=redis_host or REDIS_HOST,
-            port=redis_port or REDIS_PORT,
-            db=redis_db or REDIS_DB,
-            password=REDIS_PASSWORD,
-            decode_responses=True
-        )
+    def __init__(self, redis_db: Optional[int] = None):
+        self.redis_client = RedisClient(db=redis_db or REDIS_DB_CREDENTIALS)
         self.key_prefix = "gmail_creds:"
     
     def _get_key(self, user_id: str) -> str:
@@ -43,8 +36,8 @@ class UserCredentialStore:
         # Store with 30 day expiration (refresh tokens typically last longer)
         self.redis_client.setex(
             key, 
-            30 * 24 * 60 * 60,  # 30 days in seconds
-            credentials_json
+            credentials_json,
+            30 * 24 * 60 * 60  # 30 days in seconds
         )
     
     def get_credentials(self, user_id: str) -> Optional[Credentials]:

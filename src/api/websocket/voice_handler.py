@@ -205,18 +205,20 @@ class VoiceWebSocketHandler:
             # Monitor the task for completion (both normal and error cases)
             def task_done_callback(task):
                 try:
-                    if task.exception():
+                    if task.cancelled():
+                        logger.info(f"Response processing task cancelled for user {user_id}")
+                    elif task.exception():
                         logger.error(f"Response processing task failed for user {user_id}: {task.exception()}")
                     else:
                         logger.info(f"Response processing task completed normally for user {user_id}")
                     
-                    # Always restart the task if WebSocket is still connected
+                    # Always restart the task if WebSocket is still connected and not cancelled
                     # This handles both normal completion and errors
-                    if user_id in self.active_connections:
+                    if user_id in self.active_connections and not task.cancelled():
                         logger.info(f"Scheduling restart of response processing for user {user_id}")
                         asyncio.create_task(self._restart_response_processing(websocket, user_id, connection))
                     else:
-                        logger.info(f"User {user_id} no longer connected, not restarting response processing")
+                        logger.info(f"User {user_id} no longer connected or task cancelled, not restarting response processing")
                         
                 except Exception as e:
                     logger.error(f"Error in task callback for user {user_id}: {e}")
