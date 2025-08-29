@@ -349,13 +349,15 @@ class GmailFunctionHandler:
         if not message:
             return {"error": "Message not found"}
         
-        # Create summary
-        summary = self.create_message_summary(message)
-        
+        # Return message content for Gemini Live AI to summarize naturally
         return {
-            "response": f"Message summary: {summary}",
-            "message_subject": message.get("subject", "No subject"),
-            "message_sender": message.get("sender", "Unknown sender")
+            "message_content": {
+                "subject": message.get("subject", "No subject"),
+                "sender": message.get("sender", "Unknown sender"),
+                "date": message.get("date", "Unknown date"),
+                "body": message.get("body", message.get("snippet", ""))
+            },
+            "response": f"Here's the message to summarize: From {message.get('sender', 'Unknown')}, Subject: {message.get('subject', 'No subject')}, Content: {message.get('body', message.get('snippet', ''))}"
         }
     
     async def mark_message(self, action: str, message_index: Optional[int] = None) -> Dict[str, Any]:
@@ -570,8 +572,12 @@ class GmailFunctionHandler:
             return await self._edit_draft(**kwargs)
         
         elif action == "cancel":
-            self.session.clear_draft(self.user_id)
-            return {"response": "Draft cancelled and removed."}
+            # Don't clear draft when user says "no" - just acknowledge and wait for next action
+            draft = self.session.get_draft(self.user_id)
+            if draft:
+                return {"response": "Draft kept. You can edit it or send it later."}
+            else:
+                return {"response": "Okay."}
         
         else:
             return {"error": f"Invalid draft action: {action}"}
