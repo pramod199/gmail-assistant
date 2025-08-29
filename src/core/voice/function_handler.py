@@ -396,55 +396,163 @@ class GmailFunctionHandler:
         else:
             return {"error": f"Failed to {action} message."}
     
+    async def _create_reply_draft(self, content: str) -> Dict[str, Any]:
+        """Helper to create a reply draft"""
+        session_state = await self._ensure_session_initialized()
+        if not session_state or not session_state.get("current_message_id"):
+            return {"error": "Cannot create reply - no current message context"}
+        
+        current_message_id = session_state["current_message_id"]
+        current_message = await self.gmail.get_message_by_id(current_message_id)
+        
+        if not current_message or not current_message.get("sender"):
+            return {"error": "Cannot create reply - unable to access current message"}
+        
+        # Extract recipient email from current message sender
+        final_recipient = self._extract_email_from_sender(current_message["sender"])
+        if not self._validate_email(final_recipient):
+            return {"error": "Cannot create reply - invalid sender email in current message"}
+        
+        # Store reply draft in Redis with context info
+        reply_subject = current_message.get("subject", "")
+        if not reply_subject.lower().startswith("re:"):
+            reply_subject = f"Re: {reply_subject}"
+        
+        draft_data = {
+            "recipient": final_recipient,
+            "subject": reply_subject,
+            "content": content,
+            "reply_to": True,
+            "original_message_id": current_message_id,
+            "status": "editing"
+        }
+        
+        success = self.session.store_draft(self.user_id, draft_data)
+        if success:
+            return {"response": f"Reply draft created. To: {final_recipient}, Subject: {reply_subject}. Say 'send the draft' when ready."}
+        else:
+            return {"error": "Failed to create reply draft"}
+    
+    async def _create_new_draft(self, recipient: str, subject: str, content: str) -> Dict[str, Any]:
+        """Helper to create a new draft"""
+        # Validate and cleanup email format
+        cleaned_recipient, is_valid, error_msg = self._validate_and_cleanup_email(recipient)
+        if not is_valid:
+            return {"error": error_msg}
+        
+        # Store draft in Redis temporarily
+        draft_data = {
+            "recipient": cleaned_recipient,
+            "subject": subject,
+            "content": content,
+            "reply_to": False,
+            "status": "editing"
+        }
+        
+        logger.info(f"Attempting to store draft for user {self.user_id}")
+        logger.debug(f"Draft data: {draft_data}")
+        success = self.session.store_draft(self.user_id, draft_data)
+        logger.info(f"Draft storage result: {success}")
+        
+        if success:
+            # Verify draft was actually stored
+            stored_draft = self.session.get_draft(self.user_id)
+            logger.info(f"Verification - draft retrieved: {stored_draft is not None}")
+            if stored_draft:
+                logger.debug(f"Stored draft content: recipient={stored_draft.get('recipient')}, subject={stored_draft.get('subject')}")
+            return {"response": f"Draft created. To: {cleaned_recipient}, Subject: {subject}. Say 'send the draft' when ready."}
+        else:
+            logger.error(f"Failed to store draft in Redis for user {self.user_id}")
+            return {"error": "Failed to create draft"}
+    
+    async def _send_draft(self) -> Dict[str, Any]:
+        """Helper to send a draft"""
+        draft = self.session.get_draft(self.user_id)
+        if not draft:
+            return {"error": "No draft found to send"}
+        
+        # Check if this is a reply draft or regular draft
+        is_reply = draft.get("reply_to", False)
+        
+        if is_reply:
+            # For reply drafts, get the original message for threading
+            original_message_id = draft.get("original_message_id")
+            if not original_message_id:
+                return {"error": "Cannot send reply - missing original message reference"}
+            
+            original_message = await self.gmail.get_message_by_id(original_message_id)
+            if not original_message:
+                return {"error": "Cannot send reply - unable to access original message"}
+            
+            # Create reply draft with threading
+            draft_id = await self.gmail.create_reply_draft(
+                original_message, 
+                draft["content"], 
+                draft["recipient"]
+            )
+        else:
+            # Regular draft
+            draft_id = await self.gmail.create_draft(
+                to=draft["recipient"],
+                subject=draft["subject"],
+                body=draft["content"]
+            )
+        
+        if draft_id:
+            # Clear the Redis draft since it's now created in Gmail
+            self.session.clear_draft(self.user_id)
+            return {"response": "Draft created successfully in Gmail, please review and send from Gmail!"}
+        else:
+            return {"error": "Failed to create draft for sending"}
+    
+    async def _edit_draft(self, **kwargs) -> Dict[str, Any]:
+        """Helper to edit an existing draft"""
+        # Get existing draft
+        draft = self.session.get_draft(self.user_id)
+        if not draft:
+            return {"error": "No draft found to edit"}
+        
+        # Update provided fields, keep existing ones
+        recipient = kwargs.get("recipient")
+        subject = kwargs.get("subject")
+        content = kwargs.get("content")
+        
+        # Validate and update recipient if provided
+        if recipient:
+            cleaned_recipient, is_valid, error_msg = self._validate_and_cleanup_email(recipient)
+            if not is_valid:
+                return {"error": error_msg}
+            draft["recipient"] = cleaned_recipient
+        
+        # Update subject if provided
+        if subject:
+            draft["subject"] = subject
+        
+        # Update content if provided
+        if content:
+            draft["content"] = content
+        
+        # Store updated draft
+        success = self.session.store_draft(self.user_id, draft)
+        if success:
+            return {"response": f"Draft updated. To: {draft['recipient']}, Subject: {draft['subject']}. Say 'send the draft' when ready."}
+        else:
+            return {"error": "Failed to update draft"}
+
     async def draft_email(self, action: str, **kwargs) -> Dict[str, Any]:
         """Handle email draft operations"""
         logger.debug(f"draft_email called with params: action={action}, kwargs={kwargs}")
         
         if action == "create":
             content = kwargs.get("content")
-            reply_to = kwargs.get("reply_to", False)  # Default to False if not specified
+            reply_to = kwargs.get("reply_to", False)
             
             # Content is always required
             if not content:
                 return {"error": "Content is required for creating draft"}
             
             if reply_to:
-                # This is a reply - use current message context (cached data)
-                session_state = await self._ensure_session_initialized()
-                if not session_state or not session_state.get("current_message_id"):
-                    return {"error": "Cannot create reply - no current message context"}
-                
-                current_message_id = session_state["current_message_id"]
-                current_message = await self.gmail.get_message_by_id(current_message_id)
-                
-                if not current_message or not current_message.get("sender"):
-                    return {"error": "Cannot create reply - unable to access current message"}
-                
-                # Extract recipient email from current message sender
-                final_recipient = self._extract_email_from_sender(current_message["sender"])
-                if not self._validate_email(final_recipient):
-                    return {"error": "Cannot create reply - invalid sender email in current message"}
-                
-                # Store reply draft in Redis with context info
-                reply_subject = current_message.get("subject", "")
-                if not reply_subject.lower().startswith("re:"):
-                    reply_subject = f"Re: {reply_subject}"
-                
-                draft_data = {
-                    "recipient": final_recipient,
-                    "subject": reply_subject,
-                    "content": content,
-                    "reply_to": True,
-                    "original_message_id": current_message_id,
-                    "status": "editing"
-                }
-                
-                success = self.session.store_draft(self.user_id, draft_data)
-                if success:
-                    return {"response": f"Reply draft created. To: {final_recipient}, Subject: {reply_subject}. Say 'send the draft' when ready."}
-                else:
-                    return {"error": "Failed to create reply draft"}
-                    
+                return await self._create_reply_draft(content)
             else:
                 # This is a new draft - validate all required parameters
                 recipient = kwargs.get("recipient")
@@ -453,77 +561,13 @@ class GmailFunctionHandler:
                 if not all([recipient, subject]):
                     return {"error": "Recipient and subject are required for new drafts"}
                 
-                # Validate and cleanup email format
-                cleaned_recipient, is_valid, error_msg = self._validate_and_cleanup_email(recipient)
-                if not is_valid:
-                    return {"error": error_msg}
-                
-                # Use cleaned email
-                recipient = cleaned_recipient
-                
-                # Store draft in Redis temporarily
-                draft_data = {
-                    "recipient": recipient,
-                    "subject": subject,
-                    "content": content,
-                    "reply_to": reply_to,
-                    "status": "editing"
-                }
-                
-                logger.info(f"Attempting to store draft for user {self.user_id}")
-                logger.debug(f"Draft data: {draft_data}")
-                success = self.session.store_draft(self.user_id, draft_data)
-                logger.info(f"Draft storage result: {success}")
-                
-                if success:
-                    # Verify draft was actually stored
-                    stored_draft = self.session.get_draft(self.user_id)
-                    logger.info(f"Verification - draft retrieved: {stored_draft is not None}")
-                    if stored_draft:
-                        logger.debug(f"Stored draft content: recipient={stored_draft.get('recipient')}, subject={stored_draft.get('subject')}")
-                    return {"response": f"Draft created. To: {recipient}, Subject: {subject}. Say 'send the draft' when ready."}
-                else:
-                    logger.error(f"Failed to store draft in Redis for user {self.user_id}")
-                    return {"error": "Failed to create draft"}
+                return await self._create_new_draft(recipient, subject, content)
         
         elif action == "send":
-            draft = self.session.get_draft(self.user_id)
-            if not draft:
-                return {"error": "No draft found to send"}
-            
-            # Check if this is a reply draft or regular draft
-            is_reply = draft.get("reply_to", False)
-            
-            if is_reply:
-                # For reply drafts, get the original message for threading
-                original_message_id = draft.get("original_message_id")
-                if not original_message_id:
-                    return {"error": "Cannot send reply - missing original message reference"}
-                
-                original_message = await self.gmail.get_message_by_id(original_message_id)
-                if not original_message:
-                    return {"error": "Cannot send reply - unable to access original message"}
-                
-                # Create reply draft with threading
-                draft_id = await self.gmail.create_reply_draft(
-                    original_message, 
-                    draft["content"], 
-                    draft["recipient"]
-                )
-            else:
-                # Regular draft
-                draft_id = await self.gmail.create_draft(
-                    to=draft["recipient"],
-                    subject=draft["subject"],
-                    body=draft["content"]
-                )
-            
-            if draft_id:
-                # Clear the Redis draft since it's now created in Gmail
-                self.session.clear_draft(self.user_id)
-                return {"response": "Draft created successfully in Gmail, please review and send from Gmail!"}
-            else:
-                return {"error": "Failed to create draft for sending"}
+            return await self._send_draft()
+        
+        elif action == "edit":
+            return await self._edit_draft(**kwargs)
         
         elif action == "cancel":
             self.session.clear_draft(self.user_id)

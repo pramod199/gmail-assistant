@@ -26,7 +26,9 @@ class GeminiLiveClient:
             )
         
         logger.info("Initializing Gemini Live client with API key from settings")
-        self.client = genai.Client(api_key=api_key)
+        # Configure client with extended timeout for tool calling (2 minutes)
+        http_options = genai.types.HttpOptions(timeout=60000)  # 120000 milliseconds = 2 minutes, 60000ms - 1 min
+        self.client = genai.Client(api_key=api_key, http_options=http_options)
         self.model = "gemini-2.5-flash-live-preview"
         
         # Function definitions for Gmail operations
