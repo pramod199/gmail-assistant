@@ -103,3 +103,24 @@ class RedisClient:
         except Exception as e:
             print(f"Redis delete error: {e}")
             return False
+    
+    def setex_json(self, key: str, time: int, data: Dict[str, Any]) -> bool:
+        """Set JSON data with expiration time"""
+        try:
+            json_data = json.dumps(data)
+            result = self.client.setex(key, time, json_data)
+            return result is True
+        except Exception as e:
+            print(f"Redis setex_json error: {e}")
+            return False
+    
+    def get_json(self, key: str) -> Optional[Dict[str, Any]]:
+        """Get JSON data by key"""
+        try:
+            data = self.client.get(key)
+            if data:
+                return json.loads(data)
+            return None
+        except Exception as e:
+            print(f"Redis get_json error: {e}")
+            return None

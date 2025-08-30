@@ -50,6 +50,41 @@ class GmailService:
         """
         return await self.get_message_details(message_id)
     
+    async def search_message_ids(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
+        """Search for message IDs only (lightweight, no message content)"""
+        try:
+            logger.info("GMAIL API CALL - List Message IDs Only")
+            logger.info(f"Request query: '{query}', max_results: {max_results}")
+            
+            service = self.get_service()
+            request_params = {
+                "userId": "me",
+                "q": query,
+                "maxResults": max_results
+            }
+            
+            if page_token:
+                request_params["pageToken"] = page_token
+                
+            result = service.users().messages().list(**request_params).execute()
+            
+            messages = result.get("messages", [])
+            message_ids = [msg["id"] for msg in messages]
+            logger.info(f"GMAIL RESPONSE: Found {len(message_ids)} message IDs")
+            
+            return {
+                "message_ids": message_ids,
+                "next_page_token": result.get("nextPageToken"),
+                "result_size_estimate": result.get("resultSizeEstimate", len(message_ids))
+            }
+            
+        except HttpError as error:
+            logger.error(f"ERROR GMAIL API: {error}")
+            return {"message_ids": [], "next_page_token": None, "result_size_estimate": 0}
+        except Exception as error:
+            logger.error(f"ERROR Unexpected: {error}")
+            return {"message_ids": [], "next_page_token": None, "result_size_estimate": 0}
+
     async def search_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
         try:
             logger.info("GMAIL API CALL - List Messages")
