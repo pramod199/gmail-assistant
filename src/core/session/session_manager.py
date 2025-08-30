@@ -77,10 +77,27 @@ class SessionManager:
             session = self.init_session_state(firebase_uid)
         return session
     
+    # Current Message Caching (using string keys with TTL)
+    def store_current_message(self, firebase_uid: str, message_data: Dict[str, Any], ttl: int = 3600) -> bool:
+        """Store current message with TTL (default 1 hour)"""
+        key = f"current_message:{firebase_uid}"
+        return self.redis.setex_json(key, ttl, message_data)
+    
+    def get_current_message(self, firebase_uid: str) -> Optional[Dict[str, Any]]:
+        """Get cached current message"""
+        key = f"current_message:{firebase_uid}"
+        return self.redis.get_json(key)
+    
+    def clear_current_message(self, firebase_uid: str) -> bool:
+        """Clear cached current message"""
+        key = f"current_message:{firebase_uid}"
+        return self.redis.delete(key)
+
     def cleanup_user_data(self, firebase_uid: str) -> bool:
-        """Remove all user data (session, drafts)"""
+        """Remove all user data (session, drafts, cached messages)"""
         session_removed = self.clear_session_state(firebase_uid)
         draft_removed = self.clear_draft(firebase_uid)
+        message_removed = self.clear_current_message(firebase_uid)
         
-        print(f"User cleanup for {firebase_uid}: session={session_removed}, draft={draft_removed}")
-        return session_removed or draft_removed
+        print(f"User cleanup for {firebase_uid}: session={session_removed}, draft={draft_removed}, message={message_removed}")
+        return session_removed or draft_removed or message_removed

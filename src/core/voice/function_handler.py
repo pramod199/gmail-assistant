@@ -17,6 +17,30 @@ class GmailFunctionHandler:
         self.session = session_manager
         self.user_id = user_id
     
+    async def _get_message_with_cache(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """Get message from cache if available, otherwise fetch from Gmail API and cache it"""
+        # Check if this is the current cached message
+        session_state = self.session.get_session_state(self.user_id)
+        current_message_id = session_state.get("current_message_id") if session_state else None
+        
+        if message_id == current_message_id:
+            # Try to get from cache first
+            cached_message = self.session.get_current_message(self.user_id)
+            if cached_message:
+                logger.debug(f"Message {message_id} retrieved from cache")
+                return cached_message
+        
+        # Cache miss or different message - fetch from Gmail API
+        logger.debug(f"Fetching message {message_id} from Gmail API")
+        message = await self.gmail.get_message_by_id(message_id)
+        
+        if message and message_id == current_message_id:
+            # Cache only if this is the current message (avoid overwriting cache with wrong message)
+            self.session.store_current_message(self.user_id, message, ttl=3600)
+            logger.debug(f"Message {message_id} cached for 1 hour")
+        
+        return message
+
     async def _ensure_session_initialized(self) -> Optional[Dict[str, Any]]:
         """Ensure user has an initialized session with message queue, create one if needed"""
         session_state = self.session.get_session_state(self.user_id)
@@ -99,7 +123,7 @@ class GmailFunctionHandler:
             return None  # No current message context for reply
         
         current_message_id = session_state["current_message_id"]
-        message = await self.gmail.get_message_by_id(current_message_id)
+        message = await self._get_message_with_cache(current_message_id)
         
         if message and message.get("sender"):
             extracted_email = self._extract_email_from_sender(message["sender"])
@@ -167,12 +191,12 @@ class GmailFunctionHandler:
         else:
             query = "is:unread"  # Default
         
-        # Fetch messages using existing GmailService (already handles HTML cleaning, etc.)
-        result = await self.gmail.search_messages(query=query, max_results=max_results)
-        messages = result.get("messages", [])
+        # Fetch message IDs only (lightweight)
+        result = await self.gmail.search_message_ids(query=query, max_results=max_results)
+        message_ids = result.get("message_ids", [])
         next_page_token = result.get("next_page_token")
         
-        if not messages:
+        if not message_ids:
             self.session.update_session_navigation(
                 self.user_id,
                 current_filter=filter_type or "custom",
@@ -186,40 +210,37 @@ class GmailFunctionHandler:
                 "messages_count": 0
             }
         
-        # Update session with message queue
-        message_ids = [msg["id"] for msg in messages]
+        # Determine which message to read
+        target_index = message_index if message_index is not None and 0 <= message_index < len(message_ids) else 0
+        target_message_id = message_ids[target_index]
+        
+        # Fetch full content only for the target message
+        target_message = await self.gmail.get_message_by_id(target_message_id)
+        if not target_message:
+            return {"error": "Failed to fetch target message"}
+        
+        # Cache current message in Redis (1 hour TTL)
+        self.session.store_current_message(self.user_id, target_message, ttl=3600)
+        
+        # Update session with consolidated navigation data
         self.session.update_session_navigation(
             self.user_id,
             current_filter=filter_type or "custom",
             current_query=query,
             message_queue=message_ids,
-            total_messages=len(messages),
-            current_index=0,
+            total_messages=len(message_ids),
+            current_index=target_index,
+            current_message_id=target_message_id,
             next_page_token=next_page_token
         )
-        
-        # Determine which message to read
-        if message_index is not None and 0 <= message_index < len(messages):
-            target_message = messages[message_index]
-            self.session.update_session_navigation(self.user_id, current_index=message_index)
-        else:
-            # Read first message by default (as per PRD requirements)
-            target_message = messages[0]
-            self.session.update_session_navigation(self.user_id, current_index=0)
         
         # Format message for voice (content is already cleaned by GmailService)
         formatted_message = self.format_message_for_voice(target_message, read_full)
         
-        # Update session with current message
-        self.session.update_session_navigation(
-            self.user_id,
-            current_message_id=target_message["id"]
-        )
-        
         return {
             "response": formatted_message,
-            "messages_count": len(messages),
-            "current_index": self.session.get_session_state(self.user_id).get("current_index", 0),
+            "messages_count": len(message_ids),
+            "current_index": target_index,
             "has_more": next_page_token is not None,
             "query_used": query
         }
@@ -260,7 +281,7 @@ class GmailFunctionHandler:
         else:
             return {"error": f"Invalid navigation direction: {direction}"}
         
-        # Get the message at new index (already cleaned by GmailService)
+        # Get the message at new index (direct fetch since it's a new message)
         message_id = message_queue[new_index]
         message = await self.gmail.get_message_by_id(message_id)
         
@@ -273,6 +294,9 @@ class GmailFunctionHandler:
             current_index=new_index,
             current_message_id=message_id
         )
+        
+        # Cache the new current message
+        self.session.store_current_message(self.user_id, message, ttl=3600)
         
         formatted_message = self.format_message_for_voice(message, read_full=False)
         
@@ -344,8 +368,8 @@ class GmailFunctionHandler:
             if not message_id:
                 return {"error": "No current message to summarize"}
         
-        # Get message details (already cleaned by GmailService)
-        message = await self.gmail.get_message_by_id(message_id)
+        # Get message with caching support
+        message = await self._get_message_with_cache(message_id)
         if not message:
             return {"error": "Message not found"}
         
@@ -405,7 +429,7 @@ class GmailFunctionHandler:
             return {"error": "Cannot create reply - no current message context"}
         
         current_message_id = session_state["current_message_id"]
-        current_message = await self.gmail.get_message_by_id(current_message_id)
+        current_message = await self._get_message_with_cache(current_message_id)
         
         if not current_message or not current_message.get("sender"):
             return {"error": "Cannot create reply - unable to access current message"}
@@ -482,7 +506,7 @@ class GmailFunctionHandler:
             if not original_message_id:
                 return {"error": "Cannot send reply - missing original message reference"}
             
-            original_message = await self.gmail.get_message_by_id(original_message_id)
+            original_message = await self._get_message_with_cache(original_message_id)
             if not original_message:
                 return {"error": "Cannot send reply - unable to access original message"}
             
