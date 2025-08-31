@@ -53,9 +53,9 @@ OAUTH_REDIRECT_URI_PROD = os.getenv("OAUTH_REDIRECT_URI_PROD", "https://yourdoma
 
 # Gmail OAuth Scopes
 GMAIL_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
+    # "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.compose"
+    # "https://www.googleapis.com/auth/gmail.compose"
 ]
 
 # Security Configuration

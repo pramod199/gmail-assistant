@@ -143,11 +143,26 @@ class GeminiLiveClient:
             }
         ]
     
-    def get_session_config(self) -> Dict[str, Any]:
-        """Get configuration for Gemini Live session"""
-        return {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": """You are a helpful Gmail voice assistant. You can:
+    def get_session_config(self) -> types.LiveConnectConfig:
+        """Get configuration for Gemini Live session with improved VAD settings"""
+        return types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            
+            # Realtime input configuration with improved VAD for better speech recognition
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=False,                                          # Enable VAD
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,  # Detect speech start quickly
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,         # Wait longer for silence (KEY!)
+                    silence_duration_ms=1200,                               # Wait 1.2s of silence before processing (CRITICAL!)
+                    prefix_padding_ms=300                                    # Include 300ms before speech starts
+                )
+            ),
+            
+            # System instruction for Gmail assistant behavior
+            system_instruction=types.Content(
+                parts=[types.Part(
+                    text="""You are a helpful Gmail voice assistant. You can:
             
 1. Read emails aloud - When users ask to read messages, immediately fetch and read the first one
 2. Navigate through messages using next/previous commands
@@ -184,9 +199,13 @@ For draft/email commands:
 - When reply_to=true, only provide content parameter - recipient and subject will be auto-populated from current message
 - When reply_to=false, all parameters (recipient, subject, content) are required
 
-Keep responses concise but informative. Ask for clarification when needed.""",
-            "tools": [{"function_declarations": self.functions}]
-        }
+Keep responses concise but informative. Ask for clarification when needed."""
+                )]
+            ),
+            
+            # Function calling tools
+            tools=[types.Tool(function_declarations=self.functions)]
+        )
     
     async def create_session(self, function_handler: Callable = None):
         """Create streaming session with function calling support"""

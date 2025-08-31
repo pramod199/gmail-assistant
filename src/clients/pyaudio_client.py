@@ -20,7 +20,7 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 INPUT_RATE = 16000
 OUTPUT_RATE = 24000
-BUFFER_DURATION = 0.5
+BUFFER_DURATION = 1.5  # Send chunks every 1.5 seconds (was 0.5s)
 
 # Server configuration
 WEBSOCKET_URL = "ws://localhost:8000/api/voice/voice"
@@ -42,6 +42,7 @@ class GmailVoiceClient:
         
         print(f"🔊 Gmail Voice Client initialized")
         print(f"📡 WebSocket URL: {self.websocket_url}")
+        print(f"⏱️  Buffer duration: {BUFFER_DURATION}s (improved for better VAD)")
     
     def start_recording(self):
         """Start recording audio from microphone with isolation"""
@@ -106,11 +107,11 @@ class GmailVoiceClient:
         threading.Thread(target=play_audio, daemon=True).start()
     
     async def audio_sender(self):
-        """Send audio chunks to WebSocket"""
+        """Send audio chunks to WebSocket every 1.5 seconds"""
         audio_buffer = b""
-        chunk_size = int(INPUT_RATE * BUFFER_DURATION * 2)
+        chunk_size = int(INPUT_RATE * BUFFER_DURATION * 2)  # 1.5s of 16kHz 16-bit audio
         
-        print("📤 Audio sender started...")
+        print(f"📤 Audio sender started (sending every {BUFFER_DURATION}s)...")
         
         while self.running and self.websocket:
             while not self.audio_queue.empty():
@@ -133,7 +134,7 @@ class GmailVoiceClient:
                     }
                     
                     await self.websocket.send(json.dumps(message))
-                    print(f"📤 Sent audio chunk: {len(audio_buffer)} bytes")
+                    print(f"📤 Sent audio chunk: {len(audio_buffer)} bytes ({BUFFER_DURATION}s)")
                     audio_buffer = b""
             
             await asyncio.sleep(0.05)
