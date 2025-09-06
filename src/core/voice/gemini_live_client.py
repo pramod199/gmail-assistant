@@ -137,16 +137,23 @@ class GeminiLiveClient:
                             "type": "boolean", 
                             "description": "True if replying to current message, False for new draft. Use true for commands like 'reply to this message', 'respond to this email', 'write back'. Use false for 'create new email', 'send email to someone'."
                         },
-                        "modifications": {"type": "string", "description": "Specific changes for editing"}
                     }
                 }
             }
         ]
     
     def get_session_config(self) -> types.LiveConnectConfig:
-        """Get configuration for Gemini Live session with improved VAD settings"""
+        """Get configuration for Gemini Live session with context compression and session resumption"""
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
+            
+            # Enable context window compression with sliding window
+            context_window_compression=types.ContextWindowCompressionConfig(
+                sliding_window=types.SlidingWindow(),
+            ),
+            
+            # Always enable session resumption (handle will be set during session creation)
+            session_resumption=types.SessionResumptionConfig(),
             
             # Realtime input configuration with improved VAD for better speech recognition
             realtime_input_config=types.RealtimeInputConfig(
@@ -207,9 +214,16 @@ Keep responses concise but informative. Ask for clarification when needed."""
             tools=[types.Tool(function_declarations=self.functions)]
         )
     
-    async def create_session(self, function_handler: Callable = None):
-        """Create streaming session with function calling support"""
+    async def create_session(self, function_handler: Callable = None, resumption_handle: str = None):
+        """Create streaming session with function calling and resumption support"""
         config = self.get_session_config()
+        
+        # Set resumption handle if provided
+        if resumption_handle:
+            logger.info(f"Creating session with resumption handle")
+            config.session_resumption.handle = resumption_handle
+        else:
+            logger.info(f"Creating new session without resumption")
         
         # Return the async context manager directly
         session_context = self.client.aio.live.connect(
@@ -332,6 +346,18 @@ Keep responses concise but informative. Ask for clarification when needed."""
                     logger.debug(f"Tool call cancelled: {response.tool_call_cancellation.ids}")
                     response_data["type"] = "function_cancelled"
                     response_data["cancelled_ids"] = response.tool_call_cancellation.ids
+                    yield response_data
+                
+                # Handle session resumption updates
+                if hasattr(response, 'session_resumption_update') and response.session_resumption_update:
+                    update = response.session_resumption_update
+                    logger.info(f"Session resumption update: resumable={getattr(update, 'resumable', False)}, has_handle={hasattr(update, 'new_handle')}")
+                    
+                    response_data["type"] = "session_resumption_update"
+                    response_data["resumption_data"] = {
+                        "resumable": getattr(update, 'resumable', False),
+                        "new_handle": getattr(update, 'new_handle', None)
+                    }
                     yield response_data
         
         except asyncio.CancelledError:
