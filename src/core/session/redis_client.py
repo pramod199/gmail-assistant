@@ -1,7 +1,7 @@
 import redis
 import json
 from typing import Dict, Any, Optional
-from ...config.settings import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
+from config import settings
 
 
 class RedisClient:
@@ -9,16 +9,16 @@ class RedisClient:
     
     def __init__(self, db: Optional[int] = None):
         self.client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=db if db is not None else REDIS_DB,
-            password=REDIS_PASSWORD,
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=db if db is not None else settings.REDIS_DB,
+            password=settings.REDIS_PASSWORD,
             decode_responses=True
         )
         # Test connection
         try:
             self.client.ping()
-            print(f"✅ Connected to Redis at {REDIS_HOST}:{REDIS_PORT} (DB: {db if db is not None else REDIS_DB})")
+            print(f"✅ Connected to Redis at {settings.REDIS_HOST}:{settings.REDIS_PORT} (DB: {db if db is not None else settings.REDIS_DB})")
         except Exception as e:
             print(f"❌ Redis connection failed: {e}")
             raise ConnectionError(f"Redis connection failed: {e}")
@@ -37,7 +37,7 @@ class RedisClient:
     def hset(self, hash_name: str, key: str, data: Dict[str, Any]) -> bool:
         """Set data in hash"""
         try:
-            json_data = json.dumps(data)
+            json_data = json.dumps(data, default=str)
             result = self.client.hset(hash_name, key, json_data)
             return True
         except Exception as e:
@@ -107,7 +107,7 @@ class RedisClient:
     def setex_json(self, key: str, time: int, data: Dict[str, Any]) -> bool:
         """Set JSON data with expiration time"""
         try:
-            json_data = json.dumps(data)
+            json_data = json.dumps(data, default=str)
             result = self.client.setex(key, time, json_data)
             return result is True
         except Exception as e:

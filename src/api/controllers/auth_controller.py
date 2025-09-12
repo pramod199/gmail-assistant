@@ -7,16 +7,13 @@ import hashlib
 import secrets
 
 from src.api.middleware.auth import get_current_user
-from src.core.auth.user_credential_store import UserCredentialStore
-from src.config.settings import (
-    GMAIL_SCOPES, FRONTEND_URL, GMAIL_CREDENTIALS_FILE, 
-    OAUTH_STATE_SECRET, ENVIRONMENT, OAUTH_REDIRECT_URI_DEV, OAUTH_REDIRECT_URI_PROD
-)
+from src.core.session.session_manager import SessionManager
+from config import settings
 
 router = APIRouter()
 
-# Initialize credential store
-credential_store = UserCredentialStore()
+# Initialize session manager
+session_manager = SessionManager()
 
 
 class GmailAuthStatus(BaseModel):
@@ -34,7 +31,8 @@ async def gmail_auth_status(request: Request, user: dict = Depends(get_current_u
     user_id = user["user_id"]
     
     # Check if user has valid credentials
-    has_creds = credential_store.has_credentials(user_id)
+    credentials = session_manager.get_credentials(user_id)
+    has_creds = credentials is not None and credentials.is_authorized and not credentials.is_token_expired()
     
     if has_creds:
         return GmailAuthStatus(
@@ -92,8 +90,10 @@ async def gmail_callback(request: Request, code: str = None, state: str = None, 
         
         credentials = flow.credentials
         
-        # Store credentials for user
-        credential_store.store_credentials(user_id, credentials)
+        # Store credentials for user using Google SDK serialization
+        from src.models import GmailCredentials
+        gmail_creds = GmailCredentials.from_google_credentials(credentials)
+        session_manager.store_credentials(user_id, gmail_creds)
         
         # Return JSON success response (API-first approach)
         # TODO: When frontend is ready, uncomment below for frontend redirect:
@@ -124,7 +124,7 @@ async def revoke_gmail_access(user: dict = Depends(get_current_user)):
     Removes stored credentials
     """
     user_id = user["user_id"]
-    credential_store.remove_credentials(user_id)
+    session_manager.redis.delete(f"credentials:{user_id}")
     
     return {"message": "Gmail access revoked successfully"}
 
@@ -133,21 +133,18 @@ def _create_oauth_flow() -> Flow:
     """Create OAuth flow with proper redirect URI"""
     import os
     
-    if not os.path.exists(GMAIL_CREDENTIALS_FILE):
+    if not os.path.exists(settings.GMAIL_CREDENTIALS_FILE):
         raise HTTPException(
             status_code=500,
             detail="OAuth credentials file not found"
         )
     
-    # Use appropriate redirect URI based on environment
-    if ENVIRONMENT == "production":
-        redirect_uri = OAUTH_REDIRECT_URI_PROD
-    else:
-        redirect_uri = OAUTH_REDIRECT_URI_DEV
+    # Use settings helper for redirect URI
+    redirect_uri = settings.get_oauth_redirect_uri()
     
     flow = Flow.from_client_secrets_file(
-        GMAIL_CREDENTIALS_FILE,
-        scopes=GMAIL_SCOPES,
+        settings.GMAIL_CREDENTIALS_FILE,
+        scopes=settings.GMAIL_SCOPES,
         redirect_uri=redirect_uri
     )
     
@@ -161,7 +158,7 @@ def _generate_auth_url(user_id: str) -> str:
     # Create secure state parameter with user_id and CSRF protection
     nonce = secrets.token_urlsafe(32)
     state_data = f"{user_id}:{nonce}"
-    state_hash = hashlib.sha256(f"{state_data}:{OAUTH_STATE_SECRET}".encode()).hexdigest()
+    state_hash = hashlib.sha256(f"{state_data}:{settings.OAUTH_STATE_SECRET}".encode()).hexdigest()
     secure_state = f"{state_data}:{state_hash}"
     
     auth_url, _ = flow.authorization_url(
@@ -182,7 +179,7 @@ def _validate_state(state: str) -> str:
             raise ValueError("Invalid state format")
         
         user_id, nonce, received_hash = parts
-        expected_hash = hashlib.sha256(f"{user_id}:{nonce}:{OAUTH_STATE_SECRET}".encode()).hexdigest()
+        expected_hash = hashlib.sha256(f"{user_id}:{nonce}:{settings.OAUTH_STATE_SECRET}".encode()).hexdigest()
         
         if received_hash != expected_hash:
             raise ValueError("Invalid state hash")

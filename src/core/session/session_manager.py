@@ -3,78 +3,123 @@ import time
 import logging
 from datetime import datetime, timezone
 from .redis_client import RedisClient
+from ...models import User, GmailCredentials, SessionData, DraftData
+from config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Manage user sessions for voice interactions"""
-    
-    # Redis hash names
-    USER_SESSIONS = "user_sessions" 
-    DRAFT_STORAGE = "draft_storage"
+    """Manage user sessions, credentials, and drafts with string-based Redis keys"""
     
     def __init__(self):
         self.redis = RedisClient()
     
-    # Session State Management
-    def store_session_state(self, firebase_uid: str, session_data: Dict[str, Any]) -> bool:
-        """Store user session state"""
-        session_data["last_active"] = int(time.time())
-        return self.redis.hset(self.USER_SESSIONS, firebase_uid, session_data)
+    # User Management
+    def store_user(self, user: User) -> bool:
+        """Store user profile data"""
+        key = f"user:{user.firebase_uid}"
+        return self.redis.setex_json(key, settings.USER_TTL, user.dict())
     
-    def get_session_state(self, firebase_uid: str) -> Optional[Dict[str, Any]]:
+    def get_user(self, firebase_uid: str) -> Optional[User]:
+        """Get user profile data"""
+        key = f"user:{firebase_uid}"
+        user_data = self.redis.get_json(key)
+        return User(**user_data) if user_data else None
+    
+    def update_user(self, user: User) -> bool:
+        """Update user profile data"""
+        user.updated_at = datetime.utcnow()
+        return self.store_user(user)
+    
+    # Credentials Management
+    def store_credentials(self, firebase_uid: str, credentials: GmailCredentials) -> bool:
+        """Store user credentials"""
+        key = f"credentials:{firebase_uid}"
+        return self.redis.setex_json(key, settings.CREDENTIALS_TTL, credentials.dict())
+    
+    def get_credentials(self, firebase_uid: str) -> Optional[GmailCredentials]:
+        """Get user credentials"""
+        key = f"credentials:{firebase_uid}"
+        cred_data = self.redis.get_json(key)
+        return GmailCredentials(**cred_data) if cred_data else None
+    
+    def update_credentials(self, firebase_uid: str, credentials: GmailCredentials) -> bool:
+        """Update user credentials"""
+        credentials.updated_at = datetime.utcnow()
+        return self.store_credentials(firebase_uid, credentials)
+    
+    # Session State Management
+    def store_session_state(self, firebase_uid: str, session_data: SessionData) -> bool:
+        """Store user session state"""
+        key = f"session:{firebase_uid}"
+        return self.redis.setex_json(key, settings.SESSION_TTL, session_data.dict())
+    
+    def get_session_state(self, firebase_uid: str) -> Optional[SessionData]:
         """Get user session state"""
-        return self.redis.hget(self.USER_SESSIONS, firebase_uid)
+        key = f"session:{firebase_uid}"
+        session_data = self.redis.get_json(key)
+        return SessionData(**session_data) if session_data else None
     
     def update_session_navigation(self, firebase_uid: str, **kwargs) -> bool:
         """Update specific navigation fields in session"""
-        session = self.get_session_state(firebase_uid) or {}
-        session.update(kwargs)
+        session = self.get_session_state(firebase_uid)
+        if not session:
+            session = SessionData()
+        
+        # Update session attributes
+        for key, value in kwargs.items():
+            if hasattr(session, key):
+                setattr(session, key, value)
+        
+        session.update_activity()
         return self.store_session_state(firebase_uid, session)
     
     def clear_session_state(self, firebase_uid: str) -> bool:
         """Clear user session state"""
-        return self.redis.hdel(self.USER_SESSIONS, firebase_uid)
+        key = f"session:{firebase_uid}"
+        return self.redis.delete(key)
     
     # Draft Storage
-    def store_draft(self, firebase_uid: str, draft_data: Dict[str, Any]) -> bool:
+    def store_draft(self, firebase_uid: str, draft_data: DraftData) -> bool:
         """Store temporary draft"""
-        draft_data["created_at"] = int(time.time())
-        draft_data["modified_at"] = int(time.time())
-        return self.redis.hset(self.DRAFT_STORAGE, firebase_uid, draft_data)
+        key = f"draft:{firebase_uid}"
+        return self.redis.setex_json(key, settings.DRAFT_TTL, draft_data.dict())
     
-    def get_draft(self, firebase_uid: str) -> Optional[Dict[str, Any]]:
+    def get_draft(self, firebase_uid: str) -> Optional[DraftData]:
         """Get user's temporary draft"""
-        return self.redis.hget(self.DRAFT_STORAGE, firebase_uid)
+        key = f"draft:{firebase_uid}"
+        draft_data = self.redis.get_json(key)
+        return DraftData(**draft_data) if draft_data else None
     
     def update_draft(self, firebase_uid: str, **kwargs) -> bool:
         """Update specific draft fields"""
-        draft = self.get_draft(firebase_uid) or {}
-        draft.update(kwargs)
-        draft["modified_at"] = int(time.time())
+        draft = self.get_draft(firebase_uid)
+        if not draft:
+            # Create new draft if none exists
+            draft = DraftData(content="")
+        
+        # Update draft attributes
+        for key, value in kwargs.items():
+            if hasattr(draft, key):
+                setattr(draft, key, value)
+        
+        draft.updated_at = datetime.utcnow()
         return self.store_draft(firebase_uid, draft)
     
     def clear_draft(self, firebase_uid: str) -> bool:
         """Clear user's temporary draft"""
-        return self.redis.hdel(self.DRAFT_STORAGE, firebase_uid)
+        key = f"draft:{firebase_uid}"
+        return self.redis.delete(key)
     
     # Helper Methods
-    def init_session_state(self, firebase_uid: str) -> Dict[str, Any]:
+    def init_session_state(self, firebase_uid: str) -> SessionData:
         """Initialize default session state"""
-        default_session = {
-            "current_message_id": None,
-            "message_queue": [],
-            "current_filter": "unread",
-            "current_index": 0,
-            "total_messages": 0,
-            "next_page_token": None,
-            "last_active": int(time.time())
-        }
+        default_session = SessionData()
         self.store_session_state(firebase_uid, default_session)
         return default_session
     
-    def get_or_init_session(self, firebase_uid: str) -> Dict[str, Any]:
+    def get_or_init_session(self, firebase_uid: str) -> SessionData:
         """Get existing session or initialize new one"""
         session = self.get_session_state(firebase_uid)
         if not session:
@@ -98,14 +143,16 @@ class SessionManager:
         return self.redis.delete(key)
 
     def cleanup_user_data(self, firebase_uid: str) -> bool:
-        """Remove all user data (session, drafts, cached messages)"""
+        """Remove all user data (user, credentials, session, drafts, cached messages)"""
+        user_removed = self.redis.delete(f"user:{firebase_uid}")
+        credentials_removed = self.redis.delete(f"credentials:{firebase_uid}")
         session_removed = self.clear_session_state(firebase_uid)
         draft_removed = self.clear_draft(firebase_uid)
         message_removed = self.clear_current_message(firebase_uid)
         gemini_removed = self.clear_gemini_session_data(firebase_uid)
         
-        print(f"User cleanup for {firebase_uid}: session={session_removed}, draft={draft_removed}, message={message_removed}, gemini={gemini_removed}")
-        return session_removed or draft_removed or message_removed or gemini_removed
+        logger.info(f"User cleanup for {firebase_uid}: user={user_removed}, credentials={credentials_removed}, session={session_removed}, draft={draft_removed}, message={message_removed}, gemini={gemini_removed}")
+        return any([user_removed, credentials_removed, session_removed, draft_removed, message_removed, gemini_removed])
 
     # Gemini Session Management
     def store_gemini_resumption_token(self, firebase_uid: str, token: str) -> bool:

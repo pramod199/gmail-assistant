@@ -9,7 +9,6 @@ from ...core.voice.function_handler import GmailFunctionHandler
 from ...core.voice.retry_handler import ConnectionRetryHandler, RetryHandler
 from ...core.gmail_client.gmail_service import GmailService
 from ...core.session.session_manager import SessionManager
-from ...core.auth.user_credential_store import UserCredentialStore
 from ..middleware.auth import verify_firebase_token
 
 
@@ -21,7 +20,6 @@ class VoiceWebSocketHandler:
     
     def __init__(self):
         self.session_manager = SessionManager()
-        self.credential_store = UserCredentialStore()
         self.retry_handler = ConnectionRetryHandler(max_attempts=3)
         self.active_connections: Dict[str, Dict[str, Any]] = {}
     
@@ -42,8 +40,8 @@ class VoiceWebSocketHandler:
             logger.info(f"WebSocket accepted for user {user_id}")
             
             # Get user's Gmail credentials from Redis
-            gmail_credentials = self.credential_store.get_credentials(user_id)
-            if not gmail_credentials:
+            gmail_credentials = self.session_manager.get_credentials(user_id)
+            if not gmail_credentials or not gmail_credentials.is_authorized or gmail_credentials.is_token_expired():
                 # Send error message with auth URL before closing
                 logger.info(f"gmail auth not found {user_id}")
                 await websocket.send_json({
@@ -57,7 +55,9 @@ class VoiceWebSocketHandler:
                 return None
             
             # Initialize services for this user
-            gmail_service = self._create_gmail_service(gmail_credentials)
+            # Convert GmailCredentials to Google credentials format for GmailService
+            google_creds = gmail_credentials.to_google_credentials()
+            gmail_service = self._create_gmail_service(google_creds)
             function_handler = GmailFunctionHandler(gmail_service, self.session_manager, user_id)
             
             # Initialize Gemini Live client

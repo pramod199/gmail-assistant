@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from ..gmail_client.gmail_service import GmailService
 from ..session.session_manager import SessionManager
+from ...models import DraftData
 
 logger = logging.getLogger(__name__)
 
@@ -444,14 +445,13 @@ class GmailFunctionHandler:
         if not reply_subject.lower().startswith("re:"):
             reply_subject = f"Re: {reply_subject}"
         
-        draft_data = {
-            "recipient": final_recipient,
-            "subject": reply_subject,
-            "content": content,
-            "reply_to": True,
-            "original_message_id": current_message_id,
-            "status": "editing"
-        }
+        draft_data = DraftData(
+            recipient=final_recipient,
+            subject=reply_subject,
+            content=content,
+            is_reply=True,
+            reply_to_message_id=current_message_id
+        )
         
         success = self.session.store_draft(self.user_id, draft_data)
         if success:
@@ -467,13 +467,12 @@ class GmailFunctionHandler:
             return {"error": error_msg}
         
         # Store draft in Redis temporarily
-        draft_data = {
-            "recipient": cleaned_recipient,
-            "subject": subject,
-            "content": content,
-            "reply_to": False,
-            "status": "editing"
-        }
+        draft_data = DraftData(
+            recipient=cleaned_recipient,
+            subject=subject,
+            content=content,
+            is_reply=False
+        )
         
         logger.info(f"Attempting to store draft for user {self.user_id}")
         logger.debug(f"Draft data: {draft_data}")
@@ -485,7 +484,7 @@ class GmailFunctionHandler:
             stored_draft = self.session.get_draft(self.user_id)
             logger.info(f"Verification - draft retrieved: {stored_draft is not None}")
             if stored_draft:
-                logger.debug(f"Stored draft content: recipient={stored_draft.get('recipient')}, subject={stored_draft.get('subject')}")
+                logger.debug(f"Stored draft content: recipient={stored_draft.recipient}, subject={stored_draft.subject}")
             return {"response": f"Draft created. To: {cleaned_recipient}, Subject: {subject}. Say 'send the draft' when ready."}
         else:
             logger.error(f"Failed to store draft in Redis for user {self.user_id}")
@@ -497,12 +496,16 @@ class GmailFunctionHandler:
         if not draft:
             return {"error": "No draft found to send"}
         
+        # Check if draft is complete before sending
+        if not draft.is_complete():
+            return {"error": "Draft is incomplete. Please check recipient, subject, and content."}
+        
         # Check if this is a reply draft or regular draft
-        is_reply = draft.get("reply_to", False)
+        is_reply = draft.is_reply
         
         if is_reply:
             # For reply drafts, get the original message for threading
-            original_message_id = draft.get("original_message_id")
+            original_message_id = draft.reply_to_message_id
             if not original_message_id:
                 return {"error": "Cannot send reply - missing original message reference"}
             
@@ -510,23 +513,32 @@ class GmailFunctionHandler:
             if not original_message:
                 return {"error": "Cannot send reply - unable to access original message"}
             
+            # Mark draft as saving  
+            draft.mark_saving()
+            self.session.store_draft(self.user_id, draft)
+            
             # Create reply draft with threading
             draft_id = await self.gmail.create_reply_draft(
                 original_message, 
-                draft["content"], 
-                draft["recipient"]
+                draft.content, 
+                draft.recipient
             )
         else:
+            # Mark draft as saving for regular drafts too
+            draft.mark_saving()
+            self.session.store_draft(self.user_id, draft)
+            
             # Regular draft
             draft_id = await self.gmail.create_draft(
-                to=draft["recipient"],
-                subject=draft["subject"],
-                body=draft["content"]
+                to=draft.recipient,
+                subject=draft.subject,
+                body=draft.content
             )
         
         if draft_id:
-            # Clear the Redis draft since it's now created in Gmail
-            self.session.clear_draft(self.user_id)
+            # Mark as saved and update with Gmail draft ID
+            draft.mark_saved(draft_id)
+            self.session.store_draft(self.user_id, draft)
             return {"response": "Draft created successfully in Gmail, please review and send from Gmail!"}
         else:
             return {"error": "Failed to create draft for sending"}
@@ -538,6 +550,10 @@ class GmailFunctionHandler:
         if not draft:
             return {"error": "No draft found to edit"}
         
+        # Check if draft can be edited
+        if not draft.is_editable():
+            return {"error": f"Cannot edit draft in '{draft.status}' status"}
+        
         # Update provided fields, keep existing ones
         recipient = kwargs.get("recipient")
         subject = kwargs.get("subject")
@@ -548,20 +564,26 @@ class GmailFunctionHandler:
             cleaned_recipient, is_valid, error_msg = self._validate_and_cleanup_email(recipient)
             if not is_valid:
                 return {"error": error_msg}
-            draft["recipient"] = cleaned_recipient
+            try:
+                draft.update_recipient(cleaned_recipient)
+            except ValueError as e:
+                return {"error": str(e)}
         
         # Update subject if provided
         if subject:
-            draft["subject"] = subject
+            try:
+                draft.update_subject(subject)
+            except ValueError as e:
+                return {"error": str(e)}
         
         # Update content if provided
         if content:
-            draft["content"] = content
+            draft.update_content(content)
         
         # Store updated draft
         success = self.session.store_draft(self.user_id, draft)
         if success:
-            return {"response": f"Draft updated. To: {draft['recipient']}, Subject: {draft['subject']}. Say 'send the draft' when ready."}
+            return {"response": f"Draft updated. To: {draft.recipient}, Subject: {draft.subject}. Say 'send the draft' when ready."}
         else:
             return {"error": "Failed to update draft"}
 
