@@ -2,7 +2,6 @@ import json
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
-from ..middleware.auth import verify_firebase_token
 from ..websocket.voice_handler import VoiceWebSocketHandler
 
 logger = logging.getLogger(__name__)
@@ -12,22 +11,23 @@ voice_handler = VoiceWebSocketHandler()
 
 
 @router.websocket("/voice")
-async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+async def voice_websocket_endpoint(websocket: WebSocket, firebase_user_id: str = Query(...)):
     """
     WebSocket endpoint for streaming voice processing
     Each user gets their own isolated connection with separate:
-    - Authentication (Firebase token)
     - Gmail credentials and session
     - Gemini Live API session
     - Redis session state
+    
+    Note: Firebase authentication is handled at app level, not here
     """
     user_id = None
     
     try:
-        logger.info("WebSocket connection attempt")
+        logger.info(f"WebSocket connection attempt for user {firebase_user_id}")
         
-        # Let the handler manage authentication and WebSocket accept
-        user_id = await voice_handler.connect(websocket, token)
+        # Connect with pre-validated Firebase user ID
+        user_id = await voice_handler.connect(websocket, firebase_user_id)
         
         if not user_id:
             logger.error("Failed to establish connection - no user_id returned")

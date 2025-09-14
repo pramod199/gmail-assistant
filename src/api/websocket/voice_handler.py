@@ -10,7 +10,6 @@ from ...core.voice.retry_handler import ConnectionRetryHandler, RetryHandler
 from ...core.gmail_client.gmail_service import GmailService
 from ...core.session.session_manager import SessionManager
 from ...core.auth.user_credential_store import UserCredentialStore
-from ..middleware.auth import verify_firebase_token
 
 
 logger = logging.getLogger(__name__)
@@ -25,16 +24,13 @@ class VoiceWebSocketHandler:
         self.retry_handler = ConnectionRetryHandler(max_attempts=3)
         self.active_connections: Dict[str, Dict[str, Any]] = {}
     
-    async def connect(self, websocket: WebSocket, token: str):
-        """Establish WebSocket connection with authentication"""
+    async def connect(self, websocket: WebSocket, firebase_user_id: str):
+        """Establish WebSocket connection for pre-authenticated Firebase user"""
         try:
-            # Validate Firebase token using the proper auth method
-            user_info = verify_firebase_token(token)
-            user_id = user_info["user_id"]
-            user_email = user_info["user_email"]
+            user_id = firebase_user_id
             
             if not user_id:
-                await websocket.close(code=4001, reason="Invalid user ID in token")
+                await websocket.close(code=4001, reason="Invalid user ID")
                 return None
             
             # Accept WebSocket connection first
@@ -45,7 +41,7 @@ class VoiceWebSocketHandler:
             gmail_credentials = self.credential_store.get_credentials(user_id)
             if not gmail_credentials:
                 # Send error message with auth URL before closing
-                logger.info(f"gmail auth not found {user_id}")
+                logger.info(f"Gmail auth not found for user {user_id}")
                 await websocket.send_json({
                     "type": "error",
                     "message": "Gmail authorization required. Please authorize Gmail access first.",
@@ -63,10 +59,9 @@ class VoiceWebSocketHandler:
             # Initialize Gemini Live client
             gemini_client = GeminiLiveClient()
             
-            # Store connection info
+            # Store connection info (removed user_email since it's not needed for voice functionality)
             self.active_connections[user_id] = {
                 "websocket": websocket,
-                "user_email": user_email,
                 "gmail_service": gmail_service,
                 "function_handler": function_handler,
                 "gemini_client": gemini_client,
@@ -77,11 +72,10 @@ class VoiceWebSocketHandler:
             await websocket.send_json({
                 "type": "connected",
                 "message": "Voice assistant ready",
-                "user_id": user_id,
-                "user_email": user_email
+                "user_id": user_id
             })
             
-            logger.info(f"WebSocket connected for user {user_id} ({user_email})")
+            logger.info(f"WebSocket connected for user {user_id}")
             return user_id
             
         except Exception as e:

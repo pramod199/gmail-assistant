@@ -29,9 +29,9 @@ WEBSOCKET_URL = "ws://localhost:8000/api/voice/voice"
 class GmailVoiceClient:
     """PyAudio client that streams audio to our Gmail voice assistant WebSocket endpoint"""
     
-    def __init__(self, firebase_token: str):
-        self.firebase_token = firebase_token
-        self.websocket_url = f"{WEBSOCKET_URL}?token={firebase_token}"
+    def __init__(self, firebase_user_id: str):
+        self.firebase_user_id = firebase_user_id
+        self.websocket_url = f"{WEBSOCKET_URL}?firebase_user_id={firebase_user_id}"
         
         self.audio = pyaudio.PyAudio()
         self.audio_queue = queue.Queue()
@@ -153,7 +153,7 @@ class GmailVoiceClient:
                 
                 if message_type == "connected":
                     print(f"✅ Connected: {message.get('message')}")
-                    print(f"👤 User: {message.get('user_email')}")
+                    print(f"👤 User ID: {message.get('user_id')}")
                     
                     # Start voice session
                     await self.websocket.send(json.dumps({"type": "start_voice_session"}))
@@ -235,16 +235,17 @@ async def main():
     print("🎙️  GMAIL VOICE ASSISTANT CLIENT")
     print("=" * 60)
     
-    # Get Firebase token from user
-    print("\n📋 You need a Firebase token to authenticate.")
-    print("💡 Run 'python create_test_token.py' to generate one.")
-    token = input("🔑 Enter your Firebase token: ").strip()
+    # Get Firebase user ID from user
+    print("\n📋 You need a Firebase User ID to connect.")
+    print("💡 Authentication is now handled at the app level.")
+    print("💡 Use your Firebase UID (e.g., 'user123' or actual Firebase UID)")
+    firebase_user_id = input("🔑 Enter your Firebase User ID: ").strip()
     
-    if not token:
-        print("❌ No token provided. Exiting.")
+    if not firebase_user_id:
+        print("❌ No Firebase User ID provided. Exiting.")
         return
     
-    client = GmailVoiceClient(token)
+    client = GmailVoiceClient(firebase_user_id)
     
     try:
         print("\n🚀 Starting Gmail Voice Assistant...")
