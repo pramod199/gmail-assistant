@@ -5,20 +5,24 @@ from email.message import EmailMessage
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
+from ..config.user_config_manager import UserConfigManager
 
 logger = logging.getLogger(__name__)
 
 
 class GmailService:
-    def __init__(self, credentials: Credentials):
+    def __init__(self, credentials: Credentials, user_id: str):
         """
-        Initialize Gmail service with user credentials
+        Initialize Gmail service with user credentials and configuration
         
         Args:
             credentials: Google OAuth2 credentials for the user
+            user_id: Firebase user ID for configuration management (mandatory)
         """
         self.credentials = credentials
+        self.user_id = user_id
         self._service = None
+        self.config_manager = UserConfigManager()
     
     def get_service(self):
         if not self._service:
@@ -143,6 +147,15 @@ class GmailService:
             parsed = self._parse_message(message)
             logger.debug(f"GMAIL RESPONSE: Parsed message - Subject: {parsed.get('subject', 'No subject')[:50]}")
             
+            # Check user config and auto-mark as read if enabled
+            auto_mark_read = self.config_manager.get_config_value(self.user_id, "auto_mark_as_read", default=True)
+            if auto_mark_read and "UNREAD" in parsed.get("labels", []):
+                logger.debug(f"Auto-marking message {message_id} as read based on user config")
+                await self.mark_as_read([message_id])
+                # Remove UNREAD from parsed labels to reflect the change
+                if "labels" in parsed:
+                    parsed["labels"] = [label for label in parsed["labels"] if label != "UNREAD"]
+            
             return parsed
             
         except HttpError as error:
@@ -173,9 +186,9 @@ class GmailService:
             return False
     
     async def create_draft(self, to: str, subject: str, body: str) -> Optional[str]:
+        """Create draft or send message based on user configuration"""
         try:
-            service = self.get_service()
-            
+            # Create the email message once
             message = EmailMessage()
             message.set_content(body)
             message["To"] = to
@@ -183,7 +196,52 @@ class GmailService:
             
             encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
             
+            # Check user config for auto-send behavior
+            auto_send = self.config_manager.get_config_value(self.user_id, "auto_send_drafts", default=False)
+            
+            if auto_send:
+                # Send the message directly
+                logger.info(f"Auto-sending message to {to} based on user config")
+                return await self._send_encoded_message(encoded_message)
+            else:
+                # Create as draft
+                logger.info(f"Creating draft for {to} based on user config")
+                return await self._create_encoded_draft(encoded_message)
+            
+        except Exception as error:
+            logger.error(f"Unexpected error in create_draft: {error}")
+            return None
+    
+    async def _send_encoded_message(self, encoded_message: str) -> Optional[str]:
+        """Send an encoded email message"""
+        try:
+            service = self.get_service()
+            
+            send_message = {"raw": encoded_message}
+            
+            sent_message = service.users().messages().send(
+                userId="me",
+                body=send_message
+            ).execute()
+            
+            logger.info(f"Message sent successfully, message ID: {sent_message.get('id')}")
+            return sent_message.get("id")
+            
+        except HttpError as error:
+            logger.error(f"Error sending message: {error}")
+            return None
+        except Exception as error:
+            logger.error(f"Unexpected error sending message: {error}")
+            return None
+    
+    async def _create_encoded_draft(self, encoded_message: str, thread_id: str = None) -> Optional[str]:
+        """Create a Gmail draft from encoded message"""
+        try:
+            service = self.get_service()
+            
             create_message = {"message": {"raw": encoded_message}}
+            if thread_id:
+                create_message["message"]["threadId"] = thread_id
             
             draft = service.users().drafts().create(
                 userId="me",
@@ -196,14 +254,12 @@ class GmailService:
             logger.error(f"Error creating draft: {error}")
             return None
         except Exception as error:
-            logger.error(f"Unexpected error: {error}")
+            logger.error(f"Unexpected error creating draft: {error}")
             return None
     
     async def create_reply_draft(self, original_message: Dict[str, Any], reply_content: str, reply_recipient: str) -> Optional[str]:
-        """Create a reply draft with proper threading headers"""
+        """Create a reply draft with proper threading headers, or send based on user config"""
         try:
-            service = self.get_service()
-            
             # Extract threading information from original message
             original_message_id = original_message.get("message_id", "")
             original_references = original_message.get("references", "").strip()
@@ -241,17 +297,17 @@ class GmailService:
             # Encode message
             encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
             
-            # Create draft with threading info
-            create_message = {"message": {"raw": encoded_message}}
-            if thread_id:
-                create_message["threadId"] = thread_id
+            # Check user config for auto-send behavior
+            auto_send = self.config_manager.get_config_value(self.user_id, "auto_send_drafts", default=False)
             
-            draft = service.users().drafts().create(
-                userId="me",
-                body=create_message
-            ).execute()
-            
-            return draft.get("id")
+            if auto_send:
+                # Send the reply directly
+                logger.info(f"Auto-sending reply to {reply_recipient} based on user config")
+                return await self._send_encoded_message(encoded_message)
+            else:
+                # Create as draft with threading info
+                logger.info(f"Creating reply draft to {reply_recipient} based on user config")
+                return await self._create_encoded_draft(encoded_message, thread_id)
             
         except HttpError as error:
             logger.error(f"Error creating reply draft: {error}")
