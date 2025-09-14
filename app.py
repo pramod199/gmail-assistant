@@ -14,6 +14,7 @@ from src.api.middleware.auth import firebase_auth_middleware
 
 from src.api.controllers.auth_controller import router as auth_router
 from src.api.controllers.voice_controller import router as voice_router
+from src.api.controllers.config_controller import router as config_router
 from src.api.handlers.exception_handler import (
     http_exception_handler,
     firebase_auth_exception_handler, 
@@ -59,6 +60,7 @@ app.add_exception_handler(Exception, general_exception_handler)
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
+app.include_router(config_router, prefix="/api/config", tags=["configuration"])
 
 
 @app.get("/")

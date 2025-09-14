@@ -57,7 +57,7 @@ class VoiceWebSocketHandler:
                 return None
             
             # Initialize services for this user
-            gmail_service = self._create_gmail_service(gmail_credentials)
+            gmail_service = self._create_gmail_service(gmail_credentials, user_id)
             function_handler = GmailFunctionHandler(gmail_service, self.session_manager, user_id)
             
             # Initialize Gemini Live client
@@ -512,7 +512,6 @@ class VoiceWebSocketHandler:
         except Exception as e:
             logger.error(f"Disconnect error for user {user_id}: {e}")
     
-    def _create_gmail_service(self, credentials):
-        """Create Gmail service with user credentials"""
-    
-        return GmailService(credentials)
+    def _create_gmail_service(self, credentials, user_id: str):
+        """Create Gmail service with user credentials and user ID"""
+        return GmailService(credentials, user_id)
