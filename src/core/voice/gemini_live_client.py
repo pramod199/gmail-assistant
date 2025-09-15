@@ -35,14 +35,13 @@ class GeminiLiveClient:
         self.functions = [
             {
                 "name": "read_messages",
-                "description": "Fetch and read Gmail messages",
+                "description": "Fetch and read Gmail messages using Gmail search queries",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "filter_type": {
+                        "gmail_query": {
                             "type": "string",
-                            "enum": ["unread", "important", "starred", "all"],
-                            "description": "Type of messages to fetch"
+                            "description": "Gmail search query (e.g., 'is:unread', 'from:john@example.com', 'is:important from:boss', 'has:attachment', 'subject:meeting'). Defaults to 'is:unread' if not provided."
                         },
                         "message_index": {
                             "type": "integer",
