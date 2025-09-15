@@ -29,24 +29,6 @@ class GmailService:
             self._service = build("gmail", "v1", credentials=self.credentials)
         return self._service
     
-    def test_connection(self) -> bool:
-        try:
-            service = self.get_service()
-            service.users().getProfile(userId="me").execute()
-            return True
-        except HttpError as error:
-            logger.error(f"Gmail API connection failed: {error}")
-            return False
-        except Exception as error:
-            logger.error(f"Unexpected error: {error}")
-            return False
-    
-    async def get_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> List[Dict[str, Any]]:
-        """
-        Convenience method for API controllers - returns just the message list
-        """
-        result = await self.search_messages(query, max_results, page_token)
-        return result.get("messages", [])
     
     async def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -88,50 +70,6 @@ class GmailService:
         except Exception as error:
             logger.error(f"ERROR Unexpected: {error}")
             return {"message_ids": [], "next_page_token": None, "result_size_estimate": 0}
-
-    async def search_messages(self, query: str = "is:unread", max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
-        try:
-            logger.info("GMAIL API CALL - List Messages")
-            logger.info(f"Request query: '{query}', max_results: {max_results}")
-            
-            service = self.get_service()
-            request_params = {
-                "userId": "me",  # TODO: Replace with actual user_id for multi-user service
-                "q": query,
-                "maxResults": max_results
-            }
-            
-            if page_token:
-                request_params["pageToken"] = page_token
-                
-            result = service.users().messages().list(**request_params).execute()
-            
-            messages = result.get("messages", [])
-            logger.info(f"GMAIL RESPONSE: Found {len(messages)} message IDs")
-            
-            detailed_messages = []
-            
-            for i, msg in enumerate(messages, 1):
-                logger.debug(f"Fetching message {i}/{len(messages)}: {msg['id']}")
-                details = await self.get_message_details(msg["id"])
-                if details:
-                    detailed_messages.append(details)
-            
-            logger.info(f"Retrieved {len(detailed_messages)} complete messages")
-            
-            # Return both messages and pagination info
-            return {
-                "messages": detailed_messages,
-                "next_page_token": result.get("nextPageToken"),
-                "result_size_estimate": result.get("resultSizeEstimate", len(detailed_messages))
-            }
-            
-        except HttpError as error:
-            logger.error(f"ERROR GMAIL API: {error}")
-            return {"messages": [], "next_page_token": None, "result_size_estimate": 0}
-        except Exception as error:
-            logger.error(f"ERROR Unexpected: {error}")
-            return {"messages": [], "next_page_token": None, "result_size_estimate": 0}
     
     async def get_message_details(self, message_id: str) -> Optional[Dict[str, Any]]:
         try:

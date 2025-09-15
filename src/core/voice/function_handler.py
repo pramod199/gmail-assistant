@@ -17,122 +17,6 @@ class GmailFunctionHandler:
         self.session = session_manager
         self.user_id = user_id
     
-    async def _get_message_with_cache(self, message_id: str) -> Optional[Dict[str, Any]]:
-        """Get message from cache if available, otherwise fetch from Gmail API and cache it"""
-        # Check if this is the current cached message
-        session_state = self.session.get_session_state(self.user_id)
-        current_message_id = session_state.get("current_message_id") if session_state else None
-        
-        if message_id == current_message_id:
-            # Try to get from cache first
-            cached_message = self.session.get_current_message(self.user_id)
-            if cached_message:
-                logger.debug(f"Message {message_id} retrieved from cache")
-                return cached_message
-        
-        # Cache miss or different message - fetch from Gmail API
-        logger.debug(f"Fetching message {message_id} from Gmail API")
-        message = await self.gmail.get_message_by_id(message_id)
-        
-        if message and message_id == current_message_id:
-            # Cache only if this is the current message (avoid overwriting cache with wrong message)
-            self.session.store_current_message(self.user_id, message, ttl=3600)
-            logger.debug(f"Message {message_id} cached for 1 hour")
-        
-        return message
-
-    async def _ensure_session_initialized(self) -> Optional[Dict[str, Any]]:
-        """Ensure user has an initialized session with message queue, create one if needed"""
-        session_state = self.session.get_session_state(self.user_id)
-        
-        if not session_state or not session_state.get("message_queue"):
-            logger.info(f"No session found for user {self.user_id}, initializing with read_messages")
-            await self.read_messages()  # This will create the session
-            session_state = self.session.get_session_state(self.user_id)
-            
-            if not session_state or not session_state.get("message_queue"):
-                return None
-        
-        return session_state
-    
-    def _extract_email_from_sender(self, sender_string: str) -> str:
-        """Extract actual email address from sender field"""
-        import re
-        if not sender_string:
-            return ""
-        
-        # Handle format: "Name <email@example.com>"
-        email_match = re.search(r'<([^>]+)>', sender_string)
-        if email_match:
-            return email_match.group(1)
-        
-        # Handle format: just "email@example.com"
-        email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', sender_string)
-        if email_match:
-            return email_match.group(0)
-        
-        return ""  # Return empty if no valid email found
-    
-    def _cleanup_email(self, email: str) -> str:
-        """Clean up email address from voice input issues"""
-        if not email:
-            return email
-            
-        # Remove all spaces (common voice parsing issue)
-        cleaned = email.replace(" ", "")
-        
-        # Convert to lowercase (voice often capitalizes incorrectly)
-        cleaned = cleaned.lower()
-        
-        # Only handle space and capitalization issues
-        
-        return cleaned
-    
-    def _validate_email(self, email: str) -> bool:
-        """Validate email format - requires domain with dot (like Gmail)"""
-        import re
-        pattern = r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
-        return bool(re.match(pattern, email))
-    
-    def _validate_and_cleanup_email(self, raw_email: str) -> tuple[str, bool, str]:
-        """
-        Validate and cleanup email address, return (cleaned_email, is_valid, error_message)
-        """
-        if not raw_email:
-            return "", False, "Email address is required"
-        
-        # First cleanup common voice parsing issues
-        cleaned_email = self._cleanup_email(raw_email)
-        
-        # Check if cleaned version is valid
-        if self._validate_email(cleaned_email):
-            return cleaned_email, True, ""
-        
-        # If still invalid, provide helpful error message
-        if "@" not in cleaned_email:
-            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Missing @ symbol. Please say the email address clearly, like 'john dot smith at gmail dot com'"
-        elif "." not in cleaned_email.split("@")[1]:
-            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Missing domain extension. Please include '.com', '.org', etc."
-        else:
-            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Please speak the email address clearly and slowly, like 'sarita kumari dot nitap at gmail dot com'"
-    
-    async def _resolve_reply_recipient(self, recipient_hint: str) -> Optional[str]:
-        """Resolve recipient for reply drafts using current message context"""
-        session_state = await self._ensure_session_initialized()
-        if not session_state or not session_state.get("current_message_id"):
-            return None  # No current message context for reply
-        
-        current_message_id = session_state["current_message_id"]
-        message = await self._get_message_with_cache(current_message_id)
-        
-        if message and message.get("sender"):
-            extracted_email = self._extract_email_from_sender(message["sender"])
-            if self._validate_email(extracted_email):
-                logger.info(f"Resolved reply recipient '{recipient_hint}' to email '{extracted_email}' from current message")
-                return extracted_email
-        
-        return None
-    
     async def handle_function_call(self, function_call: Dict[str, Any]) -> Dict[str, Any]:
         """Route function calls to appropriate handlers"""
         function_name = function_call.get("name")
@@ -158,61 +42,67 @@ class GmailFunctionHandler:
             logger.error(f"Function execution error: {e}")
             return {"error": str(e)}
     
-    async def read_messages(self, gmail_query: str = None, filter_type: str = None, 
-                          message_index: Optional[int] = None, read_full: bool = False, 
-                          max_results: int = 10) -> Dict[str, Any]:
+    async def read_messages(self, gmail_query: str = None, message_index: Optional[int] = None, 
+                          read_full: bool = False, max_results: int = 10, page_token: str = None) -> Dict[str, Any]:
         """
-        Read Gmail messages with flexible query support
+        Read Gmail messages with flexible query support and pagination
         
         Args:
-            gmail_query: Direct Gmail search query (e.g., "from:john@example.com", "is:important from:boss")
-            filter_type: Simple filter fallback ("unread", "important", "starred", "all") 
-            message_index: Specific message index to read
+            gmail_query: Gmail search query (e.g., "from:john@example.com", "is:important from:boss"). Defaults to "is:unread"
+            message_index: Specific message index to read (ignored if page_token provided)
             read_full: Whether to read full message content
             max_results: Maximum number of messages to fetch
+            page_token: If provided, extend current session with next page of results
         """
-        logger.debug(f"read_messages called with params: gmail_query={gmail_query}, filter_type={filter_type}, message_index={message_index}, read_full={read_full}, max_results={max_results}")
+        logger.debug(f"read_messages called with params: gmail_query={gmail_query}, message_index={message_index}, read_full={read_full}, max_results={max_results}, page_token={page_token}")
         
         # Get or initialize session
         session_state = self.session.get_or_init_session(self.user_id)
         
-        # Build query - prioritize gmail_query over filter_type
-        if gmail_query:
-            query = gmail_query
-        elif filter_type:
-            # Fallback to simple filter mapping
-            query_map = {
-                "unread": "is:unread",
-                "important": "is:important", 
-                "starred": "is:starred",
-                "all": ""
-            }
-            query = query_map.get(filter_type, "is:unread")
+        # Determine query and current queue
+        if page_token:
+            # Pagination mode - use stored query and extend current queue
+            query = session_state.get("current_query", "is:unread")
+            current_queue = session_state.get("message_queue", [])
         else:
-            query = "is:unread"  # Default
+            # Fresh session mode - use provided or default query
+            query = gmail_query or "is:unread"
+            current_queue = []
         
-        # Fetch message IDs only (lightweight)
-        result = await self.gmail.search_message_ids(query=query, max_results=max_results)
-        message_ids = result.get("message_ids", [])
+        # Fetch message IDs
+        result = await self.gmail.search_message_ids(query=query, max_results=max_results, page_token=page_token)
+        new_message_ids = result.get("message_ids", [])
         next_page_token = result.get("next_page_token")
         
-        if not message_ids:
-            self.session.update_session_navigation(
-                self.user_id,
-                current_filter=filter_type or "custom",
-                current_query=query,
-                message_queue=[],
-                total_messages=0,
-                current_index=0
-            )
+        # Handle no messages found
+        if not new_message_ids:
+            response = "No more messages available." if page_token else f"No messages found for query: {query}"
+            if not page_token:
+                # Update session only for fresh queries
+                self.session.update_session_navigation(
+                    self.user_id,
+                    current_query=query,
+                    message_queue=[],
+                    total_messages=0,
+                    current_index=0
+                )
             return {
-                "response": f"No messages found for query: {query}",
-                "messages_count": 0
+                "response": response,
+                "messages_count": len(current_queue) if page_token else 0
             }
         
-        # Determine which message to read
-        target_index = message_index if message_index is not None and 0 <= message_index < len(message_ids) else 0
-        target_message_id = message_ids[target_index]
+        # Build final message queue
+        extended_queue = current_queue + new_message_ids
+        
+        # Determine target message index
+        if page_token:
+            # For pagination, read first message of new page
+            target_index = len(current_queue)
+        else:
+            # For fresh session, use provided index or default to 0
+            target_index = message_index if message_index is not None and 0 <= message_index < len(new_message_ids) else 0
+        
+        target_message_id = extended_queue[target_index]
         
         # Fetch full content only for the target message
         target_message = await self.gmail.get_message_by_id(target_message_id)
@@ -222,13 +112,12 @@ class GmailFunctionHandler:
         # Cache current message in Redis (1 hour TTL)
         self.session.store_current_message(self.user_id, target_message, ttl=3600)
         
-        # Update session with consolidated navigation data
+        # Update session with navigation data
         self.session.update_session_navigation(
             self.user_id,
-            current_filter=filter_type or "custom",
             current_query=query,
-            message_queue=message_ids,
-            total_messages=len(message_ids),
+            message_queue=extended_queue,
+            total_messages=len(extended_queue),
             current_index=target_index,
             current_message_id=target_message_id,
             next_page_token=next_page_token
@@ -239,7 +128,7 @@ class GmailFunctionHandler:
         
         return {
             "response": formatted_message,
-            "messages_count": len(message_ids),
+            "messages_count": len(extended_queue),
             "current_index": target_index,
             "has_more": next_page_token is not None,
             "query_used": query
@@ -261,8 +150,8 @@ class GmailFunctionHandler:
                 # Move to next message in current queue
                 new_index = current_index + 1
             elif next_page_token:
-                # Fetch next page
-                return await self.fetch_next_page()
+                # Fetch next page using read_messages with pagination
+                return await self.read_messages(page_token=next_page_token)
             else:
                 return {"response": "You've reached the last message. No more messages available."}
         
@@ -306,49 +195,6 @@ class GmailFunctionHandler:
             "total_messages": len(message_queue)
         }
     
-    async def fetch_next_page(self) -> Dict[str, Any]:
-        """Fetch next page of messages using pagination token"""
-        logger.debug(f"fetch_next_page called for user: {self.user_id}")
-        session_state = self.session.get_session_state(self.user_id)
-        next_page_token = session_state.get("next_page_token")
-        current_query = session_state.get("current_query", "is:unread")
-        
-        if not next_page_token:
-            return {"response": "No more messages available."}
-        
-        # Fetch next page using current query
-        result = await self.gmail.search_messages(query=current_query, max_results=10, page_token=next_page_token)
-        new_messages = result.get("messages", [])
-        new_next_token = result.get("next_page_token")
-        
-        if not new_messages:
-            return {"response": "No more messages available."}
-        
-        # Extend message queue
-        current_queue = session_state["message_queue"]
-        new_message_ids = [msg["id"] for msg in new_messages]
-        extended_queue = current_queue + new_message_ids
-        
-        # Move to first message of new page
-        new_index = len(current_queue)  # Index of first new message
-        
-        self.session.update_session_navigation(
-            self.user_id,
-            message_queue=extended_queue,
-            current_index=new_index,
-            next_page_token=new_next_token,
-            current_message_id=new_messages[0]["id"],
-            total_messages=len(extended_queue)
-        )
-        
-        formatted_message = self.format_message_for_voice(new_messages[0], read_full=False)
-        
-        return {
-            "response": formatted_message,
-            "current_index": new_index,
-            "total_messages": len(extended_queue),
-            "has_more": new_next_token is not None
-        }
     
     async def summarize_message(self, message_index: Optional[int] = None) -> Dict[str, Any]:
         """Summarize current or specified message"""
@@ -421,7 +267,48 @@ class GmailFunctionHandler:
             return {"response": f"Message {action_msg} successfully."}
         else:
             return {"error": f"Failed to {action} message."}
-    
+
+    async def draft_email(self, action: str, **kwargs) -> Dict[str, Any]:
+        """Handle email draft operations"""
+        logger.debug(f"draft_email called with params: action={action}, kwargs={kwargs}")
+        
+        if action == "create":
+            content = kwargs.get("content")
+            reply_to = kwargs.get("reply_to", False)
+            
+            # Content is always required
+            if not content:
+                return {"error": "Content is required for creating draft"}
+            
+            if reply_to:
+                return await self._create_reply_draft(content)
+            else:
+                # This is a new draft - validate all required parameters
+                recipient = kwargs.get("recipient")
+                subject = kwargs.get("subject")
+                
+                if not all([recipient, subject]):
+                    return {"error": "Recipient and subject are required for new drafts"}
+                
+                return await self._create_new_draft(recipient, subject, content)
+        
+        elif action == "send":
+            return await self._send_draft()
+        
+        elif action == "edit":
+            return await self._edit_draft(**kwargs)
+        
+        elif action == "cancel":
+            # Don't clear draft when user says "no" - just acknowledge and wait for next action
+            draft = self.session.get_draft(self.user_id)
+            if draft:
+                return {"response": "Draft kept. You can edit it or send it later."}
+            else:
+                return {"response": "Okay."}
+        
+        else:
+            return {"error": f"Invalid draft action: {action}"}
+
     async def _create_reply_draft(self, content: str) -> Dict[str, Any]:
         """Helper to create a reply draft"""
         session_state = await self._ensure_session_initialized()
@@ -564,47 +451,6 @@ class GmailFunctionHandler:
             return {"response": f"Draft updated. To: {draft['recipient']}, Subject: {draft['subject']}. Say 'send the draft' when ready."}
         else:
             return {"error": "Failed to update draft"}
-
-    async def draft_email(self, action: str, **kwargs) -> Dict[str, Any]:
-        """Handle email draft operations"""
-        logger.debug(f"draft_email called with params: action={action}, kwargs={kwargs}")
-        
-        if action == "create":
-            content = kwargs.get("content")
-            reply_to = kwargs.get("reply_to", False)
-            
-            # Content is always required
-            if not content:
-                return {"error": "Content is required for creating draft"}
-            
-            if reply_to:
-                return await self._create_reply_draft(content)
-            else:
-                # This is a new draft - validate all required parameters
-                recipient = kwargs.get("recipient")
-                subject = kwargs.get("subject")
-                
-                if not all([recipient, subject]):
-                    return {"error": "Recipient and subject are required for new drafts"}
-                
-                return await self._create_new_draft(recipient, subject, content)
-        
-        elif action == "send":
-            return await self._send_draft()
-        
-        elif action == "edit":
-            return await self._edit_draft(**kwargs)
-        
-        elif action == "cancel":
-            # Don't clear draft when user says "no" - just acknowledge and wait for next action
-            draft = self.session.get_draft(self.user_id)
-            if draft:
-                return {"response": "Draft kept. You can edit it or send it later."}
-            else:
-                return {"response": "Okay."}
-        
-        else:
-            return {"error": f"Invalid draft action: {action}"}
     
     def format_message_for_voice(self, message: Dict[str, Any], read_full: bool = False) -> str:
         """
@@ -619,9 +465,6 @@ class GmailFunctionHandler:
         snippet = message.get("snippet", "")
         body = message.get("body", snippet)  # Body is already cleaned by GmailService
         
-        # Extract clean sender name (remove email address part)
-        sender_name = self.extract_sender_name(sender)
-        
         # Convert timestamp to natural language for voice
         natural_date = self.format_date_for_voice(date)
         
@@ -629,38 +472,12 @@ class GmailFunctionHandler:
         if read_full and body and len(body.strip()) > 0:
             # For full reading, break long content into voice-friendly chunks
             formatted_body = self.format_content_for_voice(body)
-            return f"Message from {sender_name}, received {natural_date}, subject: {subject}. {formatted_body}"
+            return f"Message from {sender}, received {natural_date}, subject: {subject}. {formatted_body}"
         else:
             # For preview, use snippet or first part of body
             preview_text = snippet if snippet else (body[:150] + "..." if len(body) > 150 else body)
             preview_text = self.format_content_for_voice(preview_text)
-            return f"Message from {sender_name}, subject: {subject}. {preview_text}. Say 'read full message' for complete content."
-    
-    def extract_sender_name(self, sender: str) -> str:
-        """Extract clean sender name from email field"""
-        logger.debug(f"extract_sender_name called with params: sender={sender}")
-        if not sender or sender == "Unknown sender":
-            return "Unknown sender"
-        
-        # Handle format: "Name <email@example.com>"
-        if "<" in sender and ">" in sender:
-            name_part = sender.split("<")[0].strip()
-            if name_part:  # If name part exists and not empty
-                # Remove quotes if present
-                name_part = name_part.strip('"\'')
-                return name_part if name_part else "Unknown sender"
-            else:
-                # No name, extract email
-                email_part = sender.split("<")[1].split(">")[0]
-                return email_part.split("@")[0] if "@" in email_part else email_part
-        
-        # Handle format: just "email@example.com"
-        elif "@" in sender:
-            return sender.split("@")[0]
-        
-        # Handle plain name or other format
-        else:
-            return sender.strip()
+            return f"Message from {sender}, subject: {subject}. {preview_text}. Say 'read full message' for complete content."
     
     def format_date_for_voice(self, date_str: str) -> str:
         """Convert email date to natural voice format"""
@@ -791,42 +608,119 @@ class GmailFunctionHandler:
             formatted += '.'
         
         return formatted
+
+    async def _get_message_with_cache(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """Get message from cache if available, otherwise fetch from Gmail API and cache it"""
+        # Check if this is the current cached message
+        session_state = self.session.get_session_state(self.user_id)
+        current_message_id = session_state.get("current_message_id") if session_state else None
+        
+        if message_id == current_message_id:
+            # Try to get from cache first
+            cached_message = self.session.get_current_message(self.user_id)
+            if cached_message:
+                logger.debug(f"Message {message_id} retrieved from cache")
+                return cached_message
+        
+        # Cache miss or different message - fetch from Gmail API
+        logger.debug(f"Fetching message {message_id} from Gmail API")
+        message = await self.gmail.get_message_by_id(message_id)
+        
+        if message and message_id == current_message_id:
+            # Cache only if this is the current message (avoid overwriting cache with wrong message)
+            self.session.store_current_message(self.user_id, message, ttl=3600)
+            logger.debug(f"Message {message_id} cached for 1 hour")
+        
+        return message
+
+    async def _ensure_session_initialized(self) -> Optional[Dict[str, Any]]:
+        """Ensure user has an initialized session with message queue, create one if needed"""
+        session_state = self.session.get_session_state(self.user_id)
+        
+        if not session_state or not session_state.get("message_queue"):
+            logger.info(f"No session found for user {self.user_id}, initializing with read_messages")
+            await self.read_messages()  # This will create the session
+            session_state = self.session.get_session_state(self.user_id)
+            
+            if not session_state or not session_state.get("message_queue"):
+                return None
+        
+        return session_state
     
-    def create_message_summary(self, message: Dict[str, Any]) -> str:
-        """Create a simple summary of the message"""
-        logger.debug(f"create_message_summary called with params: message_id={message.get('id', 'unknown')}, subject={message.get('subject', 'No subject')[:50]}")
-        subject = message.get("subject", "No subject")
-        sender = message.get("sender", "Unknown")
-        body = message.get("body", message.get("snippet", ""))  # Body already cleaned by GmailService
+    def _extract_email_from_sender(self, sender_string: str) -> str:
+        """Extract actual email address from sender field"""
+        import re
+        if not sender_string:
+            return ""
         
-        # Extract sender name
-        sender_name = self.extract_sender_name(sender)
+        # Handle format: "Name <email@example.com>"
+        email_match = re.search(r'<([^>]+)>', sender_string)
+        if email_match:
+            return email_match.group(1)
         
-        # Simple summary logic
-        word_count = len(body.split()) if body else 0
+        # Handle format: just "email@example.com"
+        email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', sender_string)
+        if email_match:
+            return email_match.group(0)
         
-        summary = f"Email from {sender_name} about '{subject}'. Message contains approximately {word_count} words."
-        
-        # Add key information if body is available
-        if body:
-            # Look for action items or important keywords
-            important_words = [
-                "urgent", "asap", "deadline", "meeting", "call", 
-                "response required", "action required", "important",
-                "follow up", "reminder", "due", "schedule"
-            ]
+        return ""  # Return empty if no valid email found
+    
+    def _cleanup_email(self, email: str) -> str:
+        """Clean up email address from voice input issues"""
+        if not email:
+            return email
             
-            body_lower = body.lower()
-            found_keywords = [word for word in important_words if word in body_lower]
-            
-            if found_keywords:
-                # Limit to top 3 keywords to avoid long lists
-                top_keywords = found_keywords[:3]
-                summary += f" Contains important keywords: {', '.join(top_keywords)}."
-            
-            # Check for questions (might need response)
-            question_count = body.count('?')
-            if question_count > 0:
-                summary += f" Contains {question_count} question{'s' if question_count > 1 else ''}."
+        # Remove all spaces (common voice parsing issue)
+        cleaned = email.replace(" ", "")
         
-        return summary
+        # Convert to lowercase (voice often capitalizes incorrectly)
+        cleaned = cleaned.lower()
+        
+        # Only handle space and capitalization issues
+        
+        return cleaned
+    
+    def _validate_email(self, email: str) -> bool:
+        """Validate email format - requires domain with dot (like Gmail)"""
+        import re
+        pattern = r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+        return bool(re.match(pattern, email))
+    
+    def _validate_and_cleanup_email(self, raw_email: str) -> tuple[str, bool, str]:
+        """
+        Validate and cleanup email address, return (cleaned_email, is_valid, error_message)
+        """
+        if not raw_email:
+            return "", False, "Email address is required"
+        
+        # First cleanup common voice parsing issues
+        cleaned_email = self._cleanup_email(raw_email)
+        
+        # Check if cleaned version is valid
+        if self._validate_email(cleaned_email):
+            return cleaned_email, True, ""
+        
+        # If still invalid, provide helpful error message
+        if "@" not in cleaned_email:
+            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Missing @ symbol. Please say the email address clearly, like 'john dot smith at gmail dot com'"
+        elif "." not in cleaned_email.split("@")[1]:
+            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Missing domain extension. Please include '.com', '.org', etc."
+        else:
+            return cleaned_email, False, f"Invalid email format: '{raw_email}'. Please speak the email address clearly and slowly, like 'sarita kumari dot nitap at gmail dot com'"
+    
+    async def _resolve_reply_recipient(self, recipient_hint: str) -> Optional[str]:
+        """Resolve recipient for reply drafts using current message context"""
+        session_state = await self._ensure_session_initialized()
+        if not session_state or not session_state.get("current_message_id"):
+            return None  # No current message context for reply
+        
+        current_message_id = session_state["current_message_id"]
+        message = await self._get_message_with_cache(current_message_id)
+        
+        if message and message.get("sender"):
+            extracted_email = self._extract_email_from_sender(message["sender"])
+            if self._validate_email(extracted_email):
+                logger.info(f"Resolved reply recipient '{recipient_hint}' to email '{extracted_email}' from current message")
+                return extracted_email
+        
+        return None
