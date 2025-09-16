@@ -123,14 +123,21 @@ class GmailService:
             logger.error(f"Unexpected error: {error}")
             return False
     
-    async def create_draft(self, to: str, subject: str, body: str) -> Optional[str]:
-        """Create draft or send message based on user configuration"""
+    async def create_draft(self, to: str, subject: str, body: str, thread_id: str = None, 
+                          message_id: str = None, references: str = None) -> Optional[str]:
+        """Create draft or send message (with optional threading for replies) based on user configuration"""
         try:
-            # Create the email message once
+            # Create email message - Gmail handles all threading automatically
             message = EmailMessage()
             message.set_content(body)
             message["To"] = to
             message["Subject"] = subject
+            
+            # Add threading headers if provided (Gmail handles formatting)
+            if message_id:
+                message["In-Reply-To"] = message_id
+            if references:
+                message["References"] = references
             
             encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
             
@@ -139,12 +146,12 @@ class GmailService:
             
             if auto_send:
                 # Send the message directly
-                logger.info(f"Auto-sending message to {to} based on user config")
+                logger.info(f"Auto-sending {'reply' if message_id else 'message'} to {to} based on user config")
                 return await self._send_encoded_message(encoded_message)
             else:
                 # Create as draft
-                logger.info(f"Creating draft for {to} based on user config")
-                return await self._create_encoded_draft(encoded_message)
+                logger.info(f"Creating {'reply draft' if message_id else 'draft'} for {to} based on user config")
+                return await self._create_encoded_draft(encoded_message, thread_id)
             
         except Exception as error:
             logger.error(f"Unexpected error in create_draft: {error}")
@@ -195,188 +202,13 @@ class GmailService:
             logger.error(f"Unexpected error creating draft: {error}")
             return None
     
-    async def create_reply_draft(self, original_message: Dict[str, Any], reply_content: str, reply_recipient: str) -> Optional[str]:
-        """Create a reply draft with proper threading headers, or send based on user config"""
-        try:
-            # Extract threading information from original message
-            original_message_id = original_message.get("message_id", "")
-            original_references = original_message.get("references", "").strip()
-            thread_id = original_message.get("thread_id")
-            original_subject = original_message.get("subject", "")
-            
-            # Build proper reply subject (add Re: if not present)
-            reply_subject = original_subject
-            if original_subject and not original_subject.lower().startswith("re:"):
-                reply_subject = f"Re: {original_subject}"
-            
-            # Build References header (original references + original message ID)
-            reply_references = original_references
-            if original_message_id:
-                if reply_references:
-                    reply_references += f" <{original_message_id}>"
-                else:
-                    reply_references = f"<{original_message_id}>"
-            
-            # Format reply body with original message
-            formatted_reply_body = self._format_reply_body(reply_content, original_message)
-            
-            # Create email message with threading headers
-            message = EmailMessage()
-            message.set_content(formatted_reply_body)
-            message["To"] = reply_recipient
-            message["Subject"] = reply_subject
-            
-            # Add threading headers for proper Gmail threading
-            if original_message_id:
-                message["In-Reply-To"] = f"<{original_message_id}>"
-            if reply_references:
-                message["References"] = reply_references
-            
-            # Encode message
-            encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-            
-            # Check user config for auto-send behavior
-            auto_send = self.config_manager.get_config_value(self.user_id, "auto_send_drafts", default=False)
-            
-            if auto_send:
-                # Send the reply directly
-                logger.info(f"Auto-sending reply to {reply_recipient} based on user config")
-                return await self._send_encoded_message(encoded_message)
-            else:
-                # Create as draft with threading info
-                logger.info(f"Creating reply draft to {reply_recipient} based on user config")
-                return await self._create_encoded_draft(encoded_message, thread_id)
-            
-        except HttpError as error:
-            logger.error(f"Error creating reply draft: {error}")
-            return None
-        except Exception as error:
-            logger.error(f"Unexpected error creating reply: {error}")
-            return None
-    
-    def _format_reply_body(self, reply_content: str, original_message: Dict[str, Any]) -> str:
-        """Format reply body with original message in standard Gmail format"""
-        sender = original_message.get("sender", "Unknown sender")
-        date = original_message.get("date", "Unknown date")
-        original_body = original_message.get("body", "")
-        
-        # Extract sender name for cleaner display
-        sender_name = sender.split("<")[0].strip().strip('"') if "<" in sender else sender
-        
-        # Format original message with > prefix on each line
-        quoted_body = ""
-        if original_body:
-            quoted_lines = original_body.split('\n')
-            quoted_body = '\n'.join(f"> {line}" for line in quoted_lines)
-        
-        # Standard Gmail reply format
-        reply_body = f"{reply_content}\n\nOn {date}, {sender_name} wrote:\n{quoted_body}"
-        
-        return reply_body
-    
-    async def get_drafts(self, max_results: int = 10) -> List[Dict[str, Any]]:
-        """Get user's drafts"""
-        try:
-            service = self.get_service()
-            
-            # List drafts
-            results = service.users().drafts().list(
-                userId="me",
-                maxResults=max_results
-            ).execute()
-            
-            drafts = results.get("drafts", [])
-            detailed_drafts = []
-            
-            for draft in drafts:
-                draft_detail = await self.get_draft_by_id(draft["id"])
-                if draft_detail:
-                    detailed_drafts.append(draft_detail)
-            
-            return detailed_drafts
-            
-        except HttpError as error:
-            logger.error(f"Error getting drafts: {error}")
-            return []
-        except Exception as error:
-            logger.error(f"Unexpected error: {error}")
-            return []
-    
-    async def get_draft_by_id(self, draft_id: str) -> Optional[Dict[str, Any]]:
-        """Get draft by ID"""
-        try:
-            service = self.get_service()
-            
-            draft = service.users().drafts().get(
-                userId="me",
-                id=draft_id
-            ).execute()
-            
-            # Parse the draft message
-            message = draft.get("message", {})
-            parsed = self._parse_message(message)
-            
-            # Add draft-specific info
-            parsed["draft_id"] = draft.get("id")
-            parsed["is_draft"] = True
-            
-            # Also include raw headers for easier access
-            payload = message.get("payload", {})
-            headers = payload.get("headers", [])
-            parsed["headers"] = headers
-            
-            return parsed
-            
-        except HttpError as error:
-            logger.error(f"Error getting draft: {error}")
-            return None
-        except Exception as error:
-            logger.error(f"Unexpected error: {error}")
-            return None
-    
-    async def send_draft(self, draft_id: str) -> bool:
-        """Send a draft"""
-        try:
-            service = self.get_service()
-            
-            service.users().drafts().send(
-                userId="me",
-                body={"id": draft_id}
-            ).execute()
-            
-            return True
-            
-        except HttpError as error:
-            logger.error(f"Error sending draft: {error}")
-            return False
-        except Exception as error:
-            logger.error(f"Unexpected error: {error}")
-            return False
-    
-    async def delete_draft(self, draft_id: str) -> bool:
-        """Delete a draft"""
-        try:
-            service = self.get_service()
-            
-            service.users().drafts().delete(
-                userId="me",
-                id=draft_id
-            ).execute()
-            
-            return True
-            
-        except HttpError as error:
-            logger.error(f"Error deleting draft: {error}")
-            return False
-        except Exception as error:
-            logger.error(f"Unexpected error: {error}")
-            return False
     
     def _parse_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         headers = message.get("payload", {}).get("headers", [])
         
         subject = ""
         sender = ""
+        reply_to = ""
         date = ""
         message_id = ""
         references = ""
@@ -390,6 +222,8 @@ class GmailService:
                 subject = value
             elif name == "from":
                 sender = value
+            elif name == "reply-to":
+                reply_to = value
             elif name == "date":
                 date = value
             elif name == "message-id":
@@ -406,6 +240,7 @@ class GmailService:
             "thread_id": message.get("threadId"),
             "subject": subject,
             "sender": sender,
+            "reply_to": reply_to,
             "date": date,
             "body": body,
             "snippet": message.get("snippet", ""),

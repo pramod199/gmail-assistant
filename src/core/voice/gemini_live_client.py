@@ -120,7 +120,7 @@ class GeminiLiveClient:
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["create", "edit", "save_to_gmail", "send", "cancel"],
+                            "enum": ["create", "edit", "send", "cancel"],
                             "description": "Draft action to perform"
                         },
                         "recipient": {
