@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 import asyncio
 import re
 import logging
+import email.utils
 from datetime import datetime, timezone
 from ..gmail_client.gmail_service import GmailService
 from ..session.session_manager import SessionManager
@@ -318,31 +319,36 @@ class GmailFunctionHandler:
         current_message_id = session_state["current_message_id"]
         current_message = await self._get_message_with_cache(current_message_id)
         
-        if not current_message or not current_message.get("sender"):
+        if not current_message:
             return {"error": "Cannot create reply - unable to access current message"}
         
-        # Extract recipient email from current message sender
-        final_recipient = self._extract_email_from_sender(current_message["sender"])
-        if not self._validate_email(final_recipient):
-            return {"error": "Cannot create reply - invalid sender email in current message"}
+        # Use Reply-To if present, otherwise use From (RFC 2822) - Gmail handles email parsing
+        reply_to_header = current_message.get("reply_to", "").strip()
+        sender_header = current_message.get("sender", "")
+        final_recipient = reply_to_header if reply_to_header else sender_header
         
-        # Store reply draft in Redis with context info
-        reply_subject = current_message.get("subject", "")
-        if not reply_subject.lower().startswith("re:"):
-            reply_subject = f"Re: {reply_subject}"
+        if not final_recipient:
+            return {"error": "Cannot create reply - no recipient information in current message"}
         
+        # Format reply body with quoted original message
+        formatted_content = self._format_reply_body(content, current_message)
+        
+        # Store reply draft in Redis with complete threading info (no need to re-fetch)
         draft_data = {
             "recipient": final_recipient,
-            "subject": reply_subject,
-            "content": content,
-            "reply_to": True,
-            "original_message_id": current_message_id,
-            "status": "editing"
+            "subject": current_message.get("subject", ""),  # Original subject, gmail_service will add "Re: "
+            "content": formatted_content,  # Already formatted with quoted original
+            "is_reply": True,
+            "status": "editing",
+            # Threading information for gmail_service
+            "thread_id": current_message.get("thread_id"),
+            "message_id": current_message.get("message_id", ""),
+            "references": current_message.get("references", "")
         }
         
         success = self.session.store_draft(self.user_id, draft_data)
         if success:
-            return {"response": f"Reply draft created. To: {final_recipient}, Subject: {reply_subject}. Say 'send the draft' when ready."}
+            return {"response": f"Reply draft created. To: {draft_data['recipient']}, Subject: {draft_data['subject']}. Say 'send the draft' when ready."}
         else:
             return {"error": "Failed to create reply draft"}
     
@@ -384,24 +390,18 @@ class GmailFunctionHandler:
         if not draft:
             return {"error": "No draft found to send"}
         
-        # Check if this is a reply draft or regular draft
-        is_reply = draft.get("reply_to", False)
+        # Use unified create_draft method for both regular and reply drafts
+        is_reply = draft.get("is_reply", False)
         
         if is_reply:
-            # For reply drafts, get the original message for threading
-            original_message_id = draft.get("original_message_id")
-            if not original_message_id:
-                return {"error": "Cannot send reply - missing original message reference"}
-            
-            original_message = await self._get_message_with_cache(original_message_id)
-            if not original_message:
-                return {"error": "Cannot send reply - unable to access original message"}
-            
-            # Create reply draft with threading
-            draft_id = await self.gmail.create_reply_draft(
-                original_message, 
-                draft["content"], 
-                draft["recipient"]
+            # Use threading information stored in Redis (no need to re-fetch message)
+            draft_id = await self.gmail.create_draft(
+                to=draft["recipient"],
+                subject=draft["subject"],
+                body=draft["content"],
+                thread_id=draft.get("thread_id"),
+                message_id=draft.get("message_id"),
+                references=draft.get("references")
             )
         else:
             # Regular draft
@@ -451,6 +451,60 @@ class GmailFunctionHandler:
             return {"response": f"Draft updated. To: {draft['recipient']}, Subject: {draft['subject']}. Say 'send the draft' when ready."}
         else:
             return {"error": "Failed to update draft"}
+
+    def _format_reply_body(self, reply_content: str, original_message: Dict[str, Any]) -> str:
+        """Format reply body with quoted original message"""
+        sender = original_message.get("sender", "Unknown sender")
+        date = original_message.get("date", "Unknown date")
+        original_body = original_message.get("body", "")
+        
+        # Fallback to snippet if body is empty
+        if not original_body or original_body.strip() == "":
+            original_body = original_message.get("snippet", "")
+            logger.info(f"Message body was empty, using snippet as fallback")
+        
+        # Format date to local timezone like Gmail UI
+        formatted_date = self._format_date_for_reply(date)
+        
+        # Format original message with > prefix on each line
+        quoted_body = ""
+        if original_body:
+            quoted_lines = original_body.split('\n')
+            quoted_body = '\n'.join(f"> {line}" for line in quoted_lines)
+        
+        # Standard Gmail reply format with full sender info
+        reply_body = f"{reply_content}\n\nOn {formatted_date}, {sender} wrote:\n{quoted_body}"
+        
+        return reply_body
+
+    def _format_date_for_reply(self, date_str: str) -> str:
+        """Format email date like Gmail: convert UTC to local timezone"""
+        if not date_str or date_str == "Unknown date":
+            return "unknown date"
+        
+        try:
+            # Parse the RFC 2822 date (handles timezone info)
+            parsed_time = email.utils.parsedate_to_datetime(date_str)
+            if not parsed_time:
+                return date_str
+            
+            # Convert to local timezone (system timezone)
+            local_time = parsed_time.astimezone()
+            
+            # Format like Gmail: "Mon, Sep 16, 2025 at 5:53 PM" 
+            # Use %d and %I instead of %-d and %-I for better compatibility
+            day = local_time.day  # Remove leading zero manually
+            hour = local_time.hour % 12
+            if hour == 0:
+                hour = 12
+            
+            formatted = f"{local_time.strftime('%a, %b')} {day}, {local_time.year} at {hour}:{local_time.strftime('%M %p')}"
+            return formatted
+            
+        except Exception as e:
+            logger.warning(f"Date formatting error: {e}, using fallback")
+            # Fallback to original if parsing fails
+            return date_str
     
     def format_message_for_voice(self, message: Dict[str, Any], read_full: bool = False) -> str:
         """
@@ -647,24 +701,6 @@ class GmailFunctionHandler:
         
         return session_state
     
-    def _extract_email_from_sender(self, sender_string: str) -> str:
-        """Extract actual email address from sender field"""
-        import re
-        if not sender_string:
-            return ""
-        
-        # Handle format: "Name <email@example.com>"
-        email_match = re.search(r'<([^>]+)>', sender_string)
-        if email_match:
-            return email_match.group(1)
-        
-        # Handle format: just "email@example.com"
-        email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', sender_string)
-        if email_match:
-            return email_match.group(0)
-        
-        return ""  # Return empty if no valid email found
-    
     def _cleanup_email(self, email: str) -> str:
         """Clean up email address from voice input issues"""
         if not email:
@@ -708,19 +744,3 @@ class GmailFunctionHandler:
         else:
             return cleaned_email, False, f"Invalid email format: '{raw_email}'. Please speak the email address clearly and slowly, like 'sarita kumari dot nitap at gmail dot com'"
     
-    async def _resolve_reply_recipient(self, recipient_hint: str) -> Optional[str]:
-        """Resolve recipient for reply drafts using current message context"""
-        session_state = await self._ensure_session_initialized()
-        if not session_state or not session_state.get("current_message_id"):
-            return None  # No current message context for reply
-        
-        current_message_id = session_state["current_message_id"]
-        message = await self._get_message_with_cache(current_message_id)
-        
-        if message and message.get("sender"):
-            extracted_email = self._extract_email_from_sender(message["sender"])
-            if self._validate_email(extracted_email):
-                logger.info(f"Resolved reply recipient '{recipient_hint}' to email '{extracted_email}' from current message")
-                return extracted_email
-        
-        return None
