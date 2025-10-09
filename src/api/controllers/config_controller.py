@@ -23,6 +23,18 @@ class UserConfigResponse(BaseModel):
     updated_at: int
 
 
+class DeleteConfigResponse(BaseModel):
+    message: str
+    user_id: str
+    note: str
+
+
+class ConfigValueResponse(BaseModel):
+    key: str
+    value: Any
+    user_id: str
+
+
 @router.get("/user/config", response_model=UserConfigResponse)
 async def get_user_config(user: dict = Depends(get_current_user)):
     """
@@ -98,28 +110,28 @@ async def update_user_config(
         )
 
 
-@router.delete("/user/config")
+@router.delete("/user/config", response_model=DeleteConfigResponse)
 async def delete_user_config(user: dict = Depends(get_current_user)):
     """
     Delete user configuration
     User will revert to default configuration values
     """
     user_id = user["user_id"]
-    
+
     try:
         success = config_manager.delete_config(user_id)
-        
+
         if not success:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to delete user configuration"
             )
-        
-        return {
-            "message": "User configuration deleted successfully",
-            "user_id": user_id,
-            "note": "Default configuration values will be used going forward"
-        }
+
+        return DeleteConfigResponse(
+            message="User configuration deleted successfully",
+            user_id=user_id,
+            note="Default configuration values will be used going forward"
+        )
         
     except HTTPException:
         raise
@@ -130,14 +142,14 @@ async def delete_user_config(user: dict = Depends(get_current_user)):
         )
 
 
-@router.get("/user/config/{config_key}")
+@router.get("/user/config/{config_key}", response_model=ConfigValueResponse)
 async def get_config_value(config_key: str, user: dict = Depends(get_current_user)):
     """
     Get specific configuration value
     Useful for checking individual settings
     """
     user_id = user["user_id"]
-    
+
     # Validate config key
     valid_keys = ["auto_mark_as_read", "auto_send_drafts"]
     if config_key not in valid_keys:
@@ -145,15 +157,15 @@ async def get_config_value(config_key: str, user: dict = Depends(get_current_use
             status_code=400,
             detail=f"Invalid configuration key. Valid keys: {valid_keys}"
         )
-    
+
     try:
         value = config_manager.get_config_value(user_id, config_key)
-        
-        return {
-            "key": config_key,
-            "value": value,
-            "user_id": user_id
-        }
+
+        return ConfigValueResponse(
+            key=config_key,
+            value=value,
+            user_id=user_id
+        )
         
     except Exception as e:
         raise HTTPException(

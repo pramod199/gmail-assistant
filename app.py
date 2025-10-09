@@ -15,6 +15,8 @@ from src.api.middleware.auth import firebase_auth_middleware
 from src.api.controllers.auth_controller import router as auth_router
 from src.api.controllers.voice_controller import router as voice_router
 from src.api.controllers.config_controller import router as config_router
+from src.api.controllers.session_controller import router as session_router
+from src.api.controllers.user_controller import router as user_router
 from src.api.handlers.exception_handler import (
     http_exception_handler,
     firebase_auth_exception_handler, 
@@ -28,9 +30,40 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
     print("🚀 Starting Gmail Assistant API...")
+
+    # Import services
+    from src.core.session.redis_client import redis_service
+    from src.core.background_tasks import background_tasks
+    from src.core.auth.firebase_async import cleanup_executor
+
+    # Initialize Redis
+    try:
+        await redis_service.connect()
+        print("✅ Redis connected successfully")
+    except ConnectionError as e:
+        print(f"⚠️  Could not connect to Redis on startup: {e}")
+        print("   Application will continue but some features may not work")
+
+    # Start background tasks
+    await background_tasks.start()
+    print("✅ Background tasks started")
+
     yield
+
     # Shutdown
     print("📴 Shutting down Gmail Assistant API...")
+
+    # Stop background tasks
+    await background_tasks.stop()
+    print("✅ Background tasks stopped")
+
+    # Close Redis connection
+    await redis_service.close()
+    print("✅ Redis connection closed")
+
+    # Cleanup Firebase executor
+    cleanup_executor()
+    print("✅ Firebase executor cleaned up")
 
 
 app = FastAPI(
@@ -59,6 +92,8 @@ app.add_exception_handler(Exception, general_exception_handler)
 
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
+app.include_router(user_router, prefix="/api/users", tags=["users"])
+app.include_router(session_router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(config_router, prefix="/api/config", tags=["configuration"])
 

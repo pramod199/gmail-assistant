@@ -12,6 +12,9 @@ import json
 import base64
 import websockets
 import pyaudio
+import aiohttp
+import requests
+import getpass
 from typing import Optional
 
 # Audio configuration
@@ -23,25 +26,87 @@ OUTPUT_RATE = 24000
 BUFFER_DURATION = 1.5  # Send chunks every 1.5 seconds (was 0.5s)
 
 # Server configuration
+API_BASE_URL = "http://localhost:8000/api"
 WEBSOCKET_URL = "ws://localhost:8000/api/voice/voice"
+
+# Import Firebase client configuration
+try:
+    from firebase_config import FIREBASE_API_KEY, FIREBASE_AUTH_URL
+except ImportError:
+    # Fallback if firebase_config.py not found
+    import os
+    FIREBASE_API_KEY = os.getenv("FIREBASE_WEB_API_KEY", "REDACTED_FIREBASE_API_KEY")
+    FIREBASE_AUTH_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+
+
+def firebase_sign_in(email: str, password: str) -> tuple[str, str]:
+    """
+    Sign in with Firebase using email and password.
+    Returns (id_token, user_id)
+    """
+    try:
+        print(f"🔐 Authenticating with Firebase...")
+        print(f"🔑 Using API Key: {FIREBASE_API_KEY}")
+
+        # Firebase REST API for sign in
+        url = f"{FIREBASE_AUTH_URL}?key={FIREBASE_API_KEY}"
+        payload = {
+            "email": email,
+            "password": password,
+            "returnSecureToken": True
+        }
+
+        response = requests.post(url, json=payload)
+
+        if response.status_code == 200:
+            data = response.json()
+            id_token = data.get("idToken")
+            user_id = data.get("localId")
+            email = data.get("email")
+
+            print(f"✅ Authentication successful!")
+            print(f"👤 User: {email}")
+            print(f"🆔 User ID: {user_id}")
+
+            return id_token, user_id
+        else:
+            error_data = response.json()
+            error_message = error_data.get("error", {}).get("message", "Unknown error")
+            print(f"❌ Authentication failed: {error_message}")
+
+            # Handle common errors
+            if "EMAIL_NOT_FOUND" in error_message:
+                print("💡 The email address is not registered. Please sign up first.")
+            elif "INVALID_PASSWORD" in error_message:
+                print("💡 The password is incorrect.")
+            elif "USER_DISABLED" in error_message:
+                print("💡 This user account has been disabled.")
+
+            return None, None
+
+    except Exception as e:
+        print(f"❌ Error during authentication: {e}")
+        return None, None
 
 
 class GmailVoiceClient:
     """PyAudio client that streams audio to our Gmail voice assistant WebSocket endpoint"""
     
-    def __init__(self, firebase_user_id: str):
+    def __init__(self, firebase_user_id: str, firebase_token: Optional[str] = None):
         self.firebase_user_id = firebase_user_id
-        self.websocket_url = f"{WEBSOCKET_URL}?firebase_user_id={firebase_user_id}"
-        
+        self.firebase_token = firebase_token
+        self.session_id: Optional[str] = None
+        self.websocket_url: Optional[str] = None
+
         self.audio = pyaudio.PyAudio()
         self.audio_queue = queue.Queue()
         self.response_queue = queue.Queue()
         self.running = True
         self.is_playing_audio = False  # Audio isolation flag
         self.websocket = None
-        
+
         print(f"🔊 Gmail Voice Client initialized")
-        print(f"📡 WebSocket URL: {self.websocket_url}")
+        print(f"👤 User ID: {firebase_user_id}")
         print(f"⏱️  Buffer duration: {BUFFER_DURATION}s (improved for better VAD)")
     
     def start_recording(self):
@@ -197,27 +262,137 @@ class GmailVoiceClient:
         
         print("📥 Message receiver stopped")
     
+    async def create_session(self) -> bool:
+        """Create a voice session via REST API"""
+        try:
+            print(f"🔄 Creating voice session...")
+
+            headers = {"Content-Type": "application/json"}
+            if self.firebase_token:
+                headers["Authorization"] = f"Bearer {self.firebase_token}"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{API_BASE_URL}/sessions",
+                    json={},  # Empty body as CreateSessionRequest has no required fields
+                    headers=headers
+                ) as response:
+                    if response.status == 201:  # Created
+                        data = await response.json()
+                        self.session_id = data.get("session_id")
+                        gmail_authorized = data.get("gmail_authorized", False)
+                        requires_gmail_auth = data.get("requires_gmail_auth", False)
+                        gmail_auth_url = data.get("gmail_auth_url")
+
+                        print(f"✅ Session created: {self.session_id}")
+
+                        # Check if Gmail authorization is required
+                        if requires_gmail_auth:
+                            print("\n" + "=" * 60)
+                            print("⚠️  GMAIL AUTHORIZATION REQUIRED")
+                            print("=" * 60)
+                            print("📧 You need to authorize Gmail access to use this assistant.")
+                            print(f"\n🔗 Please open this URL in your browser:")
+                            print(f"\n{gmail_auth_url}\n")
+                            print("After authorizing, press Enter to continue...")
+                            input()
+
+                            # Verify authorization was completed
+                            if not await self._verify_gmail_auth():
+                                print("❌ Gmail authorization not completed. Cannot proceed.")
+                                return False
+
+                            print("✅ Gmail authorization verified!")
+
+                        # Build WebSocket URL with session_id and user_id
+                        self.websocket_url = f"{WEBSOCKET_URL}?session_id={self.session_id}&firebase_user_id={self.firebase_user_id}"
+                        print(f"📡 WebSocket URL: {self.websocket_url}")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        print(f"❌ Failed to create session: {response.status} - {error_text}")
+                        return False
+
+        except Exception as e:
+            print(f"❌ Session creation error: {e}")
+            return False
+
+    async def _verify_gmail_auth(self) -> bool:
+        """Verify that Gmail authorization was completed"""
+        try:
+            headers = {}
+            if self.firebase_token:
+                headers["Authorization"] = f"Bearer {self.firebase_token}"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{API_BASE_URL}/auth/gmail/status",
+                    headers=headers
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data.get("is_authorized", False)
+                    return False
+
+        except Exception as e:
+            print(f"⚠️  Error verifying Gmail auth: {e}")
+            return False
+
+    async def delete_session(self):
+        """Delete the voice session via REST API"""
+        if not self.session_id:
+            return
+
+        try:
+            print(f"🗑️  Deleting session {self.session_id}...")
+
+            headers = {}
+            if self.firebase_token:
+                headers["Authorization"] = f"Bearer {self.firebase_token}"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.delete(
+                    f"{API_BASE_URL}/sessions/{self.session_id}",
+                    params={"firebase_user_id": self.firebase_user_id},
+                    headers=headers
+                ) as response:
+                    if response.status == 200:
+                        print(f"✅ Session deleted")
+                    else:
+                        print(f"⚠️  Failed to delete session: {response.status}")
+
+        except Exception as e:
+            print(f"⚠️  Session deletion error: {e}")
+
     async def connect_and_run(self):
         """Connect to WebSocket and start conversation"""
         try:
+            # First, create a session via REST API
+            if not await self.create_session():
+                print("❌ Cannot proceed without a session")
+                return
+
             print(f"🔌 Connecting to {self.websocket_url}...")
-            
+
             async with websockets.connect(self.websocket_url) as websocket:
                 self.websocket = websocket
                 print("🔌 WebSocket connected!")
-                
+
                 # Start audio recording and playback
                 self.start_recording()
                 self.start_playback()
-                
+
                 # Run audio sender and message receiver concurrently
                 await asyncio.gather(
                     self.audio_sender(),
                     self.message_receiver()
                 )
-                
+
         except Exception as e:
             print(f"❌ Connection error: {e}")
+        finally:
+            # Clean up session
+            await self.delete_session()
     
     def cleanup(self):
         """Clean up resources"""
@@ -234,18 +409,30 @@ async def main():
     print("=" * 60)
     print("🎙️  GMAIL VOICE ASSISTANT CLIENT")
     print("=" * 60)
-    
-    # Get Firebase user ID from user
-    print("\n📋 You need a Firebase User ID to connect.")
-    print("💡 Authentication is now handled at the app level.")
-    print("💡 Use your Firebase UID (e.g., 'user123' or actual Firebase UID)")
-    firebase_user_id = input("🔑 Enter your Firebase User ID: ").strip()
-    
-    if not firebase_user_id:
-        print("❌ No Firebase User ID provided. Exiting.")
+
+    # Firebase authentication
+    print("\n🔐 Firebase Authentication")
+    print("=" * 60)
+    email = input("📧 Email: ").strip()
+
+    if not email:
+        print("❌ Email is required. Exiting.")
         return
-    
-    client = GmailVoiceClient(firebase_user_id)
+
+    password = getpass.getpass("🔒 Password: ")
+
+    if not password:
+        print("❌ Password is required. Exiting.")
+        return
+
+    # Authenticate with Firebase
+    firebase_token, firebase_user_id = firebase_sign_in(email, password)
+
+    if not firebase_token or not firebase_user_id:
+        print("❌ Authentication failed. Cannot proceed.")
+        return
+
+    client = GmailVoiceClient(firebase_user_id, firebase_token)
     
     try:
         print("\n🚀 Starting Gmail Voice Assistant...")

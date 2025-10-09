@@ -58,7 +58,7 @@ class GmailFunctionHandler:
         logger.debug(f"read_messages called with params: gmail_query={gmail_query}, message_index={message_index}, read_full={read_full}, max_results={max_results}, page_token={page_token}")
         
         # Get or initialize session
-        session_state = self.session.get_or_init_session(self.user_id)
+        session_state = await self.session.get_or_init_session(self.user_id)
         
         # Determine query and current queue
         if page_token:
@@ -80,7 +80,7 @@ class GmailFunctionHandler:
             response = "No more messages available." if page_token else f"No messages found for query: {query}"
             if not page_token:
                 # Update session only for fresh queries
-                self.session.update_session_navigation(
+                await self.session.update_session_navigation(
                     self.user_id,
                     current_query=query,
                     message_queue=[],
@@ -111,10 +111,10 @@ class GmailFunctionHandler:
             return {"error": "Failed to fetch target message"}
         
         # Cache current message in Redis (1 hour TTL)
-        self.session.store_current_message(self.user_id, target_message, ttl=3600)
-        
+        await self.session.store_current_message(self.user_id, target_message, ttl=3600)
+
         # Update session with navigation data
-        self.session.update_session_navigation(
+        await self.session.update_session_navigation(
             self.user_id,
             current_query=query,
             message_queue=extended_queue,
@@ -179,14 +179,14 @@ class GmailFunctionHandler:
             return {"error": "Message not found"}
         
         # Update session
-        self.session.update_session_navigation(
+        await self.session.update_session_navigation(
             self.user_id,
             current_index=new_index,
             current_message_id=message_id
         )
-        
+
         # Cache the new current message
-        self.session.store_current_message(self.user_id, message, ttl=3600)
+        await self.session.store_current_message(self.user_id, message, ttl=3600)
         
         formatted_message = self.format_message_for_voice(message, read_full=False)
         
@@ -301,7 +301,7 @@ class GmailFunctionHandler:
         
         elif action == "cancel":
             # Don't clear draft when user says "no" - just acknowledge and wait for next action
-            draft = self.session.get_draft(self.user_id)
+            draft = await self.session.get_draft(self.user_id)
             if draft:
                 return {"response": "Draft kept. You can edit it or send it later."}
             else:
@@ -346,7 +346,7 @@ class GmailFunctionHandler:
             "references": current_message.get("references", "")
         }
         
-        success = self.session.store_draft(self.user_id, draft_data)
+        success = await self.session.store_draft(self.user_id, draft_data)
         if success:
             return {"response": f"Reply draft created. To: {draft_data['recipient']}, Subject: {draft_data['subject']}. Say 'send the draft' when ready."}
         else:
@@ -370,12 +370,12 @@ class GmailFunctionHandler:
         
         logger.info(f"Attempting to store draft for user {self.user_id}")
         logger.debug(f"Draft data: {draft_data}")
-        success = self.session.store_draft(self.user_id, draft_data)
+        success = await self.session.store_draft(self.user_id, draft_data)
         logger.info(f"Draft storage result: {success}")
-        
+
         if success:
             # Verify draft was actually stored
-            stored_draft = self.session.get_draft(self.user_id)
+            stored_draft = await self.session.get_draft(self.user_id)
             logger.info(f"Verification - draft retrieved: {stored_draft is not None}")
             if stored_draft:
                 logger.debug(f"Stored draft content: recipient={stored_draft.get('recipient')}, subject={stored_draft.get('subject')}")
@@ -386,13 +386,13 @@ class GmailFunctionHandler:
     
     async def _send_draft(self) -> Dict[str, Any]:
         """Helper to send a draft"""
-        draft = self.session.get_draft(self.user_id)
+        draft = await self.session.get_draft(self.user_id)
         if not draft:
             return {"error": "No draft found to send"}
-        
+
         # Use unified create_draft method for both regular and reply drafts
         is_reply = draft.get("is_reply", False)
-        
+
         if is_reply:
             # Use threading information stored in Redis (no need to re-fetch message)
             draft_id = await self.gmail.create_draft(
@@ -410,10 +410,10 @@ class GmailFunctionHandler:
                 subject=draft["subject"],
                 body=draft["content"]
             )
-        
+
         if draft_id:
             # Clear the Redis draft since it's now created in Gmail
-            self.session.clear_draft(self.user_id)
+            await self.session.clear_draft(self.user_id)
             return {"response": "Draft created successfully in Gmail, please review and send from Gmail!"}
         else:
             return {"error": "Failed to create draft for sending"}
@@ -421,32 +421,32 @@ class GmailFunctionHandler:
     async def _edit_draft(self, **kwargs) -> Dict[str, Any]:
         """Helper to edit an existing draft"""
         # Get existing draft
-        draft = self.session.get_draft(self.user_id)
+        draft = await self.session.get_draft(self.user_id)
         if not draft:
             return {"error": "No draft found to edit"}
-        
+
         # Update provided fields, keep existing ones
         recipient = kwargs.get("recipient")
         subject = kwargs.get("subject")
         content = kwargs.get("content")
-        
+
         # Validate and update recipient if provided
         if recipient:
             cleaned_recipient, is_valid, error_msg = self._validate_and_cleanup_email(recipient)
             if not is_valid:
                 return {"error": error_msg}
             draft["recipient"] = cleaned_recipient
-        
+
         # Update subject if provided
         if subject:
             draft["subject"] = subject
-        
+
         # Update content if provided
         if content:
             draft["content"] = content
-        
+
         # Store updated draft
-        success = self.session.store_draft(self.user_id, draft)
+        success = await self.session.store_draft(self.user_id, draft)
         if success:
             return {"response": f"Draft updated. To: {draft['recipient']}, Subject: {draft['subject']}. Say 'send the draft' when ready."}
         else:
@@ -666,39 +666,39 @@ class GmailFunctionHandler:
     async def _get_message_with_cache(self, message_id: str) -> Optional[Dict[str, Any]]:
         """Get message from cache if available, otherwise fetch from Gmail API and cache it"""
         # Check if this is the current cached message
-        session_state = self.session.get_session_state(self.user_id)
+        session_state = await self.session.get_session_state(self.user_id)
         current_message_id = session_state.get("current_message_id") if session_state else None
-        
+
         if message_id == current_message_id:
             # Try to get from cache first
-            cached_message = self.session.get_current_message(self.user_id)
+            cached_message = await self.session.get_current_message(self.user_id)
             if cached_message:
                 logger.debug(f"Message {message_id} retrieved from cache")
                 return cached_message
-        
+
         # Cache miss or different message - fetch from Gmail API
         logger.debug(f"Fetching message {message_id} from Gmail API")
         message = await self.gmail.get_message_by_id(message_id)
-        
+
         if message and message_id == current_message_id:
             # Cache only if this is the current message (avoid overwriting cache with wrong message)
-            self.session.store_current_message(self.user_id, message, ttl=3600)
+            await self.session.store_current_message(self.user_id, message, ttl=3600)
             logger.debug(f"Message {message_id} cached for 1 hour")
-        
+
         return message
 
     async def _ensure_session_initialized(self) -> Optional[Dict[str, Any]]:
         """Ensure user has an initialized session with message queue, create one if needed"""
-        session_state = self.session.get_session_state(self.user_id)
-        
+        session_state = await self.session.get_session_state(self.user_id)
+
         if not session_state or not session_state.get("message_queue"):
             logger.info(f"No session found for user {self.user_id}, initializing with read_messages")
             await self.read_messages()  # This will create the session
-            session_state = self.session.get_session_state(self.user_id)
-            
+            session_state = await self.session.get_session_state(self.user_id)
+
             if not session_state or not session_state.get("message_queue"):
                 return None
-        
+
         return session_state
     
     def _cleanup_email(self, email: str) -> str:
