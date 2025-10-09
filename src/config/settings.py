@@ -1,5 +1,12 @@
 # Gmail Assistant Configuration Settings
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env file from project root
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # Environment Detection
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
@@ -63,3 +70,12 @@ OAUTH_STATE_SECRET = os.getenv("OAUTH_STATE_SECRET", "your_secret_key_for_oauth_
 
 # Credentials Configuration
 GMAIL_CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", "./credentials.json")
+
+# Voice Session Configuration
+VOICE_SESSION_TTL = int(os.getenv("VOICE_SESSION_TTL", "86400"))  # 24 hours
+MAX_CONCURRENT_SESSIONS_PER_USER = int(os.getenv("MAX_CONCURRENT_SESSIONS_PER_USER", "3"))
+
+# WebSocket Configuration
+WS_CLOSE_TIMEOUT = int(os.getenv("WS_CLOSE_TIMEOUT", "5"))  # seconds
+WS_PING_INTERVAL = int(os.getenv("WS_PING_INTERVAL", "30"))  # seconds
+WS_PING_TIMEOUT = int(os.getenv("WS_PING_TIMEOUT", "10"))  # seconds

@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from urllib.parse import urlencode
 from pydantic import BaseModel
+from typing import Optional
 import hashlib
 import secrets
 
@@ -25,16 +26,34 @@ class GmailAuthStatus(BaseModel):
     auth_url: str = None
 
 
+class GmailCallbackResponse(BaseModel):
+    success: bool
+    message: str
+    user_id: Optional[str] = None
+    next_step: Optional[str] = None
+    error: Optional[str] = None
+
+
+class RevokeResponse(BaseModel):
+    message: str
+
+
 @router.get("/gmail/status", response_model=GmailAuthStatus)
 async def gmail_auth_status(request: Request, user: dict = Depends(get_current_user)):
     """
-    Check if user has authorized Gmail access
-    Returns auth URL if not authorized
+    Check if user has authorized Gmail access.
+
+    **Authentication Required:**
+    - Header: `Authorization: Bearer <firebase_id_token>`
+
+    **Returns:**
+    - `is_authorized`: true if Gmail is authorized
+    - `auth_url`: OAuth URL to authorize (if not authorized)
     """
     user_id = user["user_id"]
     
     # Check if user has valid credentials
-    has_creds = credential_store.has_credentials(user_id)
+    has_creds = await credential_store.has_credentials(user_id)
     
     if has_creds:
         return GmailAuthStatus(
@@ -55,8 +74,13 @@ async def gmail_auth_status(request: Request, user: dict = Depends(get_current_u
 @router.get("/gmail/authorize")
 async def gmail_authorize(request: Request, user: dict = Depends(get_current_user)):
     """
-    Start Gmail OAuth flow
-    Redirects user to Google OAuth consent screen
+    Start Gmail OAuth flow.
+
+    **Authentication Required:**
+    - Header: `Authorization: Bearer <firebase_id_token>`
+
+    **Response:**
+    - Redirects to Google OAuth consent screen
     """
     user_id = user["user_id"]
     auth_url = _generate_auth_url(user_id)
@@ -64,69 +88,82 @@ async def gmail_authorize(request: Request, user: dict = Depends(get_current_use
     return RedirectResponse(url=auth_url)
 
 
-@router.get("/gmail/callback")
+@router.get("/gmail/callback", response_model=GmailCallbackResponse)
 async def gmail_callback(request: Request, code: str = None, state: str = None, error: str = None):
     """
-    Handle OAuth callback from Google
-    Exchanges authorization code for credentials and stores them
+    Handle OAuth callback from Google.
+
+    **Authentication:** Not required (public endpoint)
+
+    **Flow:**
+    1. Google redirects here after user authorizes
+    2. Exchanges authorization code for credentials
+    3. Stores refresh token in Redis
+    4. Returns success response
     """
     if error:
         raise HTTPException(
             status_code=400,
             detail=f"OAuth error: {error}"
         )
-    
+
     if not code or not state:
         raise HTTPException(
             status_code=400,
             detail="Missing authorization code or state parameter"
         )
-    
+
     try:
         # Validate state and extract user_id
         user_id = _validate_state(state)
-        
+
         # Create flow and exchange code for credentials
         flow = _create_oauth_flow()
         flow.fetch_token(code=code)
-        
+
         credentials = flow.credentials
-        
+
         # Store credentials for user
-        credential_store.store_credentials(user_id, credentials)
-        
+        await credential_store.store_credentials(user_id, credentials)
+
         # Return JSON success response (API-first approach)
         # TODO: When frontend is ready, uncomment below for frontend redirect:
         # return RedirectResponse(url=f"{FRONTEND_URL}/auth/success")
-        return {
-            "success": True,
-            "message": "Gmail authorization successful",
-            "user_id": user_id,
-            "next_step": "You can now use Gmail API endpoints"
-        }
-        
+        return GmailCallbackResponse(
+            success=True,
+            message="Gmail authorization successful",
+            user_id=user_id,
+            next_step="You can now use Gmail API endpoints"
+        )
+
     except Exception as e:
         print(f"OAuth callback error: {e}")
         # TODO: When frontend is ready, uncomment below for frontend redirect:
         # error_params = urlencode({"error": str(e)})
         # return RedirectResponse(url=f"{FRONTEND_URL}/auth/error?{error_params}")
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Gmail authorization failed"
-        }
+        return GmailCallbackResponse(
+            success=False,
+            message="Gmail authorization failed",
+            error=str(e)
+        )
 
 
-@router.delete("/gmail/revoke")
+@router.delete("/gmail/revoke", response_model=RevokeResponse)
 async def revoke_gmail_access(user: dict = Depends(get_current_user)):
     """
-    Revoke Gmail access for current user
-    Removes stored credentials
+    Revoke Gmail access for current user.
+
+    **Authentication Required:**
+    - Header: `Authorization: Bearer <firebase_id_token>`
+
+    **Action:**
+    - Removes stored Gmail credentials from Redis
+    - User will need to re-authorize on next use
     """
     user_id = user["user_id"]
-    credential_store.remove_credentials(user_id)
-    
-    return {"message": "Gmail access revoked successfully"}
+    await credential_store.remove_credentials(user_id)
+
+    return RevokeResponse(message="Gmail access revoked successfully")
 
 
 def _create_oauth_flow() -> Flow:

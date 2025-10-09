@@ -136,7 +136,16 @@ async def firebase_auth_middleware(request: Request, call_next):
                 content={"detail": e.detail}
             )
             raise e
-        
+
+        # Get or create local user record
+        try:
+            from ...core.auth.user_store import user_store
+            local_user = await user_store.get_or_create_user(user_id, user_email)
+            logger.debug(f"Local user: {local_user.user_id} (logins: {local_user.login_count})")
+        except Exception as e:
+            logger.error(f"Failed to get/create local user: {e}")
+            # Continue anyway - user store is not critical for authentication
+
         # Add user info to request state
         request.state.user_id = user_id
         request.state.user_email = user_email
