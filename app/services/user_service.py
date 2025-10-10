@@ -70,7 +70,7 @@ class UserService:
 
         # Store in Redis (no expiration - persist indefinitely)
         user_key = await self.get_user_key(firebase_uid)
-        await self.redis_client.set_json(user_key, user.model_dump())
+        await self.redis_client.set_json(user_key, user.model_dump(mode='json'))
 
         logger.info(f"Created new user: {firebase_uid} ({email}) auth_type={auth_type}")
         return user
@@ -96,7 +96,7 @@ class UserService:
 
         # Store back to Redis
         user_key = await self.get_user_key(firebase_uid)
-        await self.redis_client.set_json(user_key, user.model_dump())
+        await self.redis_client.set_json(user_key, user.model_dump(mode='json'))
 
         logger.debug(f"Updated login for user {firebase_uid} (total logins: {user.login_count})")
         return user
@@ -150,7 +150,7 @@ class UserService:
         user.email = email
 
         user_key = await self.get_user_key(firebase_uid)
-        await self.redis_client.set_json(user_key, user.model_dump())
+        await self.redis_client.set_json(user_key, user.model_dump(mode='json'))
 
         logger.info(f"Updated email for user {firebase_uid}: {email}")
         return True

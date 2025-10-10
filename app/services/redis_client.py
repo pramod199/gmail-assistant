@@ -167,6 +167,17 @@ class RedisClient:
             logger.error(f"Redis delete error: {e}")
             return False
 
+    async def set_json(self, key: str, data: Dict[str, Any], ex: Optional[int] = None) -> bool:
+        """Set JSON data with optional expiration"""
+        try:
+            client = await self.get_client()
+            json_data = json.dumps(data)
+            result = await client.set(key, json_data, ex=ex)
+            return result is True
+        except Exception as e:
+            logger.error(f"Redis set_json error: {e}")
+            return False
+
     async def setex_json(self, key: str, time: int, data: Dict[str, Any]) -> bool:
         """Set JSON data with expiration time"""
         try:
