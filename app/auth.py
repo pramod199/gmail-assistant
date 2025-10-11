@@ -1,9 +1,9 @@
 import logging
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
-from fastapi import HTTPException, Request, Depends, Query, Header
+from fastapi import HTTPException, Depends, Query, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional, Dict
+from typing import Optional
 from app.config import settings
 from app.models.user import User
 
@@ -69,17 +69,11 @@ async def verify_firebase_token(
         from app.services.firebase_async import verify_id_token_async
         decoded_token = await verify_id_token_async(token)
         return decoded_token
-    except firebase_auth.FirebaseError as e:
-        logger.warning(f"Firebase token verification failed: {e}")
+    except Exception as e:
+        logger.error(f"Firebase token verification failed: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=401,
-            detail=f"Invalid Firebase Token: {e}"
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error during Firebase token verification: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Error verifying Firebase token"
+            detail=f"Invalid or expired Firebase token: {str(e)}"
         )
 
 
@@ -162,12 +156,12 @@ async def authenticate_websocket_user(
             user = await user_service.get_or_create_user_by_firebase_uid(uid, email)
             logger.debug(f"Authenticated WebSocket user {user.id} via Firebase token.")
             return user
-        except firebase_auth.FirebaseError as e:
-            logger.warning(f"WebSocket Firebase token verification failed: {e}")
-            raise HTTPException(status_code=1008, detail=f"Invalid Firebase Token: {e}")
+        except HTTPException:
+            # Re-raise HTTPException as-is
+            raise
         except Exception as e:
-            logger.error(f"Unexpected error during WebSocket Firebase token verification: {e}")
-            raise HTTPException(status_code=1008, detail="Error verifying Firebase token")
+            logger.error(f"WebSocket Firebase token verification failed: {type(e).__name__}: {e}")
+            raise HTTPException(status_code=1008, detail=f"Invalid or expired Firebase token: {str(e)}")
 
     raise HTTPException(
         status_code=1008,
