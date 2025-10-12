@@ -26,8 +26,12 @@ class GeminiLiveClient:
             )
         
         logger.info("Initializing Gemini Live client with API key from settings")
-        # Configure client with extended timeout for tool calling (2 minutes)
-        http_options = genai.types.HttpOptions(timeout=60000)  # 120000 milliseconds = 2 minutes, 60000ms - 1 min
+        # Configure client with timeout from settings
+        # With context window compression enabled, sessions can run indefinitely
+        # Default 5 minutes allows for natural conversation flow with pauses
+        timeout_ms = settings.GEMINI_HTTP_TIMEOUT
+        logger.info(f"Setting Gemini HTTP timeout to {timeout_ms}ms ({timeout_ms/60000:.1f} minutes)")
+        http_options = genai.types.HttpOptions(timeout=timeout_ms)
         self.client = genai.Client(api_key=api_key, http_options=http_options)
         self.model = "gemini-2.5-flash-live-preview"
         

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.5-pro"
     GEMINI_TEMPERATURE: int = 1
     GEMINI_MAX_TOKENS: int = 1000
+    GEMINI_HTTP_TIMEOUT: int = 300000  # HTTP timeout in milliseconds (default: 5 minutes)
 
     # Voice Session Configuration
     VOICE_SESSION_TTL: int = 86400  # 24 hours
