@@ -86,7 +86,7 @@ class GmailService:
             logger.debug(f"GMAIL RESPONSE: Parsed message - Subject: {parsed.get('subject', 'No subject')[:50]}")
             
             # Check user config and auto-mark as read if enabled
-            auto_mark_read = self.config_manager.get_config_value(self.user_id, "auto_mark_as_read", default=True)
+            auto_mark_read = await self.config_manager.get_config_value(self.user_id, "auto_mark_as_read", default=True)
             if auto_mark_read and "UNREAD" in parsed.get("labels", []):
                 logger.debug(f"Auto-marking message {message_id} as read based on user config")
                 await self.mark_as_read([message_id])
@@ -142,7 +142,7 @@ class GmailService:
             encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
             
             # Check user config for auto-send behavior
-            auto_send = self.config_manager.get_config_value(self.user_id, "auto_send_drafts", default=False)
+            auto_send = await self.config_manager.get_config_value(self.user_id, "auto_send_drafts", default=False)
             
             if auto_send:
                 # Send the message directly

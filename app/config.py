@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     WS_PING_INTERVAL: int = 30  # seconds
     WS_PING_TIMEOUT: int = 10  # seconds
 
+    # Audio Processing Settings
+    AUDIO_FORMAT: str = "audio/pcm"
+    AUDIO_SAMPLE_RATE: int = 16000  # Input sample rate
+    AUDIO_OUTPUT_SAMPLE_RATE: int = 24000  # Gemini outputs at 24kHz
+
+    # Gemini Voice Configuration
+    GEMINI_VOICE: str = "Aoede"  # Default voice for Gmail assistant
+
     class Config:
         env_file = ".env"
 

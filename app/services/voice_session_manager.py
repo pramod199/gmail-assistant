@@ -40,13 +40,18 @@ class VoiceSession:
 
         # In-memory only attributes (not persisted)
         self.gemini_session: Optional[Any] = None
-        self.gemini_client: Optional[Any] = None
         self.session_context: Optional[Any] = None
         self.function_handler: Optional[Any] = None
         self.gmail_service: Optional[Any] = None
         self.response_task: Optional[asyncio.Task] = None
         self.response_monitor_active: bool = False
         self.websocket: Optional[Any] = None
+
+        # Audio processing attributes
+        self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=100)  # Bounded queue for outgoing audio
+
+        # Session coordination
+        self.initialization_event: asyncio.Event = asyncio.Event()  # Signal when Gemini session is ready
 
     @property
     def id(self) -> str:

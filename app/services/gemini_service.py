@@ -14,17 +14,17 @@ logger = logging.getLogger(__name__)
 
 class GeminiLiveClient:
     """Gemini Live API client for streaming voice processing"""
-    
+
     def __init__(self):
         # Get API key from settings
         api_key = settings.GEMINI_API_KEY
-            
+
         if not api_key or api_key == "your_gemini_api_key_here":
             raise ValueError(
                 "Gemini API key is required. Please set the settings.GEMINI_API_KEY environment variable. "
                 "You can get an API key from https://makersuite.google.com/app/apikey"
             )
-        
+
         logger.info("Initializing Gemini Live client with API key from settings")
         # Configure client with timeout from settings
         # With context window compression enabled, sessions can run indefinitely
@@ -34,6 +34,10 @@ class GeminiLiveClient:
         http_options = genai.types.HttpOptions(timeout=timeout_ms)
         self.client = genai.Client(api_key=api_key, http_options=http_options)
         self.model = "gemini-2.5-flash-live-preview"
+
+        # Background task management (following auto-translator pattern)
+        self.active_sessions: Dict[str, asyncio.Task] = {}  # Track background session tasks
+        self.session_resumption_handles: Dict[str, str] = {}  # Store resumption handles for reconnection
         
         # Function definitions for Gmail operations
         self.functions = [
@@ -146,29 +150,35 @@ class GeminiLiveClient:
         ]
     
     def get_session_config(self) -> types.LiveConnectConfig:
-        """Get configuration for Gemini Live session with context compression and session resumption"""
+        """Get configuration for Gemini Live session with context compression and session resumption.
+
+        Note: Interruption (barge-in) works automatically in Gemini Live API by default.
+        No explicit realtime_input_config needed - when user starts speaking, Gemini naturally stops.
+        """
+        # Configure speech settings with voice (following auto-translator pattern)
+        speech_config = types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=settings.GEMINI_VOICE)
+            )
+        )
+
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
-            
+
+            # Set media resolution to MEDIUM for better real-time performance (following auto-translator pattern)
+            media_resolution="MEDIA_RESOLUTION_MEDIUM",
+
+            # Configure voice for natural conversation (following auto-translator pattern)
+            speech_config=speech_config,
+
             # Enable context window compression with sliding window
             context_window_compression=types.ContextWindowCompressionConfig(
                 sliding_window=types.SlidingWindow(),
             ),
-            
+
             # Always enable session resumption (handle will be set during session creation)
             session_resumption=types.SessionResumptionConfig(),
-            
-            # Realtime input configuration with improved VAD for better speech recognition
-            realtime_input_config=types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=False,                                          # Enable VAD
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,  # Detect speech start quickly
-                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,         # Wait longer for silence (KEY!)
-                    silence_duration_ms=1200,                               # Wait 1.2s of silence before processing (CRITICAL!)
-                    prefix_padding_ms=300                                    # Include 300ms before speech starts
-                )
-            ),
-            
+
             # System instruction for Gmail assistant behavior
             system_instruction=types.Content(
                 parts=[types.Part(
@@ -217,161 +227,263 @@ Keep responses concise but informative. Ask for clarification when needed."""
             tools=[types.Tool(function_declarations=self.functions)]
         )
     
-    async def create_session(self, function_handler: Callable = None, resumption_handle: str = None):
-        """Create streaming session with function calling and resumption support"""
-        config = self.get_session_config()
-        
-        # Set resumption handle if provided
-        if resumption_handle:
-            logger.info(f"Creating session with resumption handle")
-            config.session_resumption.handle = resumption_handle
-        else:
-            logger.info(f"Creating new session without resumption")
-        
-        # Return the async context manager directly
-        session_context = self.client.aio.live.connect(
-            model=self.model,
-            config=config
-        )
-        
-        # Store function handler reference for later use
-        session_context._function_handler = function_handler
-        
-        return session_context
-    
-    async def send_audio_chunk(self, session, audio_data: bytes, mime_type: str = "audio/pcm;rate=16000"):
-        """Send audio chunk to Gemini Live API"""
+    async def initialize_session(self, voice_session, function_handler: Callable = None) -> bool:
+        """Initialize Gemini Live session in background task (following auto-translator pattern).
+
+        This method starts a background task that manages the Gemini session lifecycle,
+        including automatic reconnection and session resumption.
+
+        Args:
+            voice_session: VoiceSession object to initialize
+            function_handler: Function to handle Gmail operations
+
+        Returns:
+            True if session initialized successfully, False otherwise
+        """
         try:
-            # Try the old method first
-            await session.send_realtime_input(
-                audio=types.Blob(
-                    data=audio_data,
-                    mime_type=mime_type
-                )
-            )
+            # Clear the event in case of re-initialization
+            voice_session.initialization_event.clear()
+
+            # Start background task to manage Gemini session
+            task = asyncio.create_task(self._manage_gemini_session(voice_session, function_handler))
+            self.active_sessions[voice_session.id] = task
+
+            # Wait for Gemini session to be fully initialized
+            await voice_session.initialization_event.wait()
+
+            # Check if initialization was successful
+            if not voice_session.gemini_session:
+                logger.error(f"Gemini session not set after initialization for voice session {voice_session.id}")
+                # Clean up failed task
+                if voice_session.id in self.active_sessions:
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            logger.debug(f"Early-failed task for session {voice_session.id} cancelled")
+                    del self.active_sessions[voice_session.id]
+                return False
+
+            return True
+
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout waiting for Gemini session {voice_session.id} to initialize")
+            return False
         except Exception as e:
-            logger.error(f"Audio send error: {e}")
-            # Just continue - audio sending failure shouldn't crash everything
-    
-    async def process_responses(self, session, function_handler: Callable = None) -> AsyncGenerator[Dict[str, Any], None]:
-        """Process responses from Gemini Live API and handle function calls"""
-        logger.info(f"Starting Gemini Live response processing")
-        logger.debug(f"Session type: {type(session)}")
-        logger.debug(f"Session methods: {[method for method in dir(session) if not method.startswith('_')]}")
-        
-        try:
-            response_count = 0
-            async for response in session.receive():
-                response_count += 1
-                logger.debug(f"Processing response #{response_count}")
-                logger.debug(f"Raw Gemini response: {response}")
-                
-                response_data = {
-                    "type": "response",
-                    "data": None,
-                    "text": None,
-                    "function_call": None,
-                    "audio_data": None
-                }
-                
-                # Handle audio response from server_content
-                if hasattr(response, 'server_content') and response.server_content:
-                    server_content = response.server_content
-                    
-                    # Check for audio data
-                    if hasattr(server_content, 'model_turn') and server_content.model_turn:
-                        model_turn = server_content.model_turn
-                        for part in model_turn.parts:
-                            if hasattr(part, 'inline_data') and part.inline_data:
-                                logger.debug(f"Found audio data")
-                                response_data["type"] = "audio"
-                                response_data["audio_data"] = part.inline_data.data
-                                yield response_data
-                
-                # Handle text response
-                if hasattr(response, 'text') and response.text:
-                    logger.debug(f"Found text response: {response.text}")
-                    response_data["type"] = "text"
-                    response_data["text"] = response.text
-                    yield response_data
-                
-                # Handle tool calls (new format)
-                if hasattr(response, 'tool_call') and response.tool_call:
-                    logger.debug(f"Found tool call: {response.tool_call}")
-                    
-                    # Process each function call
-                    for function_call in response.tool_call.function_calls:
-                        logger.debug(f"Processing function: {function_call.name} with args: {function_call.args}")
-                        
-                        response_data["type"] = "function_call"
-                        response_data["function_call"] = {
-                            "name": function_call.name,
-                            "parameters": function_call.args,
-                            "id": function_call.id
-                        }
-                        
-                        # Execute function if handler provided
-                        if function_handler:
-                            try:
-                                logger.debug(f"Executing function with handler")
-                                function_result = await function_handler(response_data["function_call"])
-                                logger.debug(f"Function result: {function_result}")
-                                logger.debug(f"Function result type: {type(function_result)}")
-                                
-                                # Ensure function result is a dict
-                                if not isinstance(function_result, dict):
-                                    function_result = {"result": str(function_result)}
-                                
-                                # Send function result back to Gemini using send_tool_response
-                                logger.debug(f"Attempting to send function response...")
-                                try:
-                                    function_responses = [
-                                        types.FunctionResponse(
-                                            id=function_call.id,
-                                            name=function_call.name,
-                                            response=function_result
-                                        )
-                                    ]
-                                    await session.send_tool_response(function_responses=function_responses)
-                                    logger.debug(f"Function response sent successfully via send_tool_response")
-                                except Exception as e:
-                                    logger.error(f"Failed to send function response: {e}")
-                                    logger.error(f"Continuing without sending response...")
-                                
-                            except Exception as e:
-                                logger.error(f"Function execution error: {e}")
-                                # Don't try to send error response for now - just continue
-                        
-                        yield response_data
-                
-                # Handle tool call cancellations
-                if hasattr(response, 'tool_call_cancellation') and response.tool_call_cancellation:
-                    logger.debug(f"Tool call cancelled: {response.tool_call_cancellation.ids}")
-                    response_data["type"] = "function_cancelled"
-                    response_data["cancelled_ids"] = response.tool_call_cancellation.ids
-                    yield response_data
-                
-                # Handle session resumption updates
-                if hasattr(response, 'session_resumption_update') and response.session_resumption_update:
-                    update = response.session_resumption_update
-                    logger.info(f"Session resumption update: resumable={getattr(update, 'resumable', False)}, has_handle={hasattr(update, 'new_handle')}")
-                    
-                    response_data["type"] = "session_resumption_update"
-                    response_data["resumption_data"] = {
-                        "resumable": getattr(update, 'resumable', False),
-                        "new_handle": getattr(update, 'new_handle', None)
-                    }
-                    yield response_data
-        
-        except asyncio.CancelledError:
-            logger.info("Response processing cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"Error in process_responses: {e}")
-            raise
-        finally:
-            logger.info("Finished Gemini Live response processing")
-    
+            logger.error(f"Error initializing Gemini session {voice_session.id}: {e}")
+            return False
+
+    async def _manage_gemini_session(self, voice_session, function_handler: Callable = None):
+        """Background task to manage Gemini session with automatic reconnection.
+
+        This runs independently of WebSocket lifecycle, allowing session persistence
+        across WebSocket disconnections.
+
+        Based on auto-translator pattern with:
+        - Automatic reconnection with exponential backoff
+        - Session resumption using stored handles
+        - Turn-based response processing
+        """
+        max_retries = 3
+        retry_delay = 1.0  # Start with 1 second
+        consecutive_errors = 0
+
+        while voice_session.active and consecutive_errors < max_retries:
+            gemini_api_session = None
+            try:
+                config = self.get_session_config()
+
+                # Attempt session resumption if handle available
+                resumption_handle = self.session_resumption_handles.get(voice_session.id)
+                if resumption_handle:
+                    logger.info(f"Attempting to resume session {voice_session.id} with handle")
+                    config.session_resumption.handle = resumption_handle
+
+                async with self.client.aio.live.connect(model=self.model, config=config) as gemini_api_session_ctx:
+                    # Store session and signal initialization
+                    voice_session.gemini_session = gemini_api_session_ctx
+                    gemini_api_session = gemini_api_session_ctx
+
+                    # Only set initialization event on first successful connection
+                    if consecutive_errors == 0:
+                        voice_session.initialization_event.set()
+
+                    consecutive_errors = 0  # Reset error counter on success
+                    logger.info(f"Session {voice_session.id} {'reconnected' if resumption_handle else 'initialized'}")
+
+                    # Process responses in turn-based loop
+                    while voice_session.active:
+                        try:
+                            turn = gemini_api_session_ctx.receive()
+                            async for response in turn:
+                                if not voice_session.active:
+                                    break
+
+                                # Handle session resumption updates
+                                if hasattr(response, 'session_resumption_update') and response.session_resumption_update:
+                                    update = response.session_resumption_update
+                                    if update.resumable and update.new_handle:
+                                        self.session_resumption_handles[voice_session.id] = update.new_handle
+                                        logger.info(f"Stored session resumption handle for {voice_session.id}")
+
+                                # Handle go_away (session expiring soon)
+                                if hasattr(response, 'go_away') and response.go_away:
+                                    logger.warning(f"Session {voice_session.id} will terminate in {response.go_away.time_left} seconds")
+                                    break  # Trigger reconnection
+
+                                # Handle audio response (following auto-translator pattern)
+                                if response.data is not None:
+                                    try:
+                                        await voice_session.message_queue.put(response.data)
+                                    except asyncio.QueueFull:
+                                        logger.warning(f"Queue full for session {voice_session.id}, dropping audio")
+
+                                # Handle function calls
+                                if hasattr(response, 'tool_call') and response.tool_call:
+                                    for function_call in response.tool_call.function_calls:
+                                        if function_handler:
+                                            try:
+                                                function_result = await function_handler({
+                                                    "name": function_call.name,
+                                                    "parameters": function_call.args,
+                                                    "id": function_call.id
+                                                })
+
+                                                if not isinstance(function_result, dict):
+                                                    function_result = {"result": str(function_result)}
+
+                                                # Send result back to Gemini
+                                                await gemini_api_session_ctx.send_tool_response(
+                                                    function_responses=[types.FunctionResponse(
+                                                        id=function_call.id,
+                                                        name=function_call.name,
+                                                        response=function_result
+                                                    )]
+                                                )
+                                            except Exception as e:
+                                                logger.error(f"Function execution error: {e}")
+
+                                # Handle user interruption (barge-in)
+                                if hasattr(response, 'server_content') and response.server_content:
+                                    if hasattr(response.server_content, 'interrupted') and response.server_content.interrupted:
+                                        logger.info(f"User interrupted generation for session {voice_session.id}")
+
+                                        # Clear audio queue immediately to stop playback
+                                        while not voice_session.message_queue.empty():
+                                            try:
+                                                voice_session.message_queue.get_nowait()
+                                                voice_session.message_queue.task_done()
+                                            except asyncio.QueueEmpty:
+                                                break
+                                        logger.info(f"Cleared audio queue due to interruption")
+
+                                        # Send interruption signal to client to clear its queue
+                                        if voice_session.websocket:
+                                            try:
+                                                import json
+                                                await voice_session.websocket.send_text(json.dumps({
+                                                    "type": "interruption",
+                                                    "message": "User interrupted"
+                                                }))
+                                                logger.info(f"Sent interruption signal to client for session {voice_session.id}")
+                                            except Exception as e:
+                                                logger.error(f"Failed to send interruption signal: {e}")
+
+                                # Keep the tool_call_cancellation handler for function call cancellations
+                                if hasattr(response, 'tool_call_cancellation') and response.tool_call_cancellation:
+                                    cancelled_ids = response.tool_call_cancellation.ids
+                                    logger.info(f"Tool calls cancelled: {cancelled_ids}")
+
+                            if not voice_session.active:
+                                break
+
+                        except asyncio.CancelledError:
+                            logger.info(f"Gemini session task for {voice_session.id} cancelled during receive loop")
+                            raise
+                        except Exception as e:
+                            logger.error(f"Error in receive loop for {voice_session.id}: {e}")
+                            if not voice_session.active:
+                                break
+                            break  # Trigger reconnection
+
+                # Connection closed - attempt reconnection if session still active
+                if voice_session.active:
+                    logger.warning(f"Gemini connection closed for {voice_session.id}, attempting reconnection")
+                    voice_session.gemini_session = None
+                    consecutive_errors += 1
+                    continue
+                else:
+                    logger.info(f"Session {voice_session.id} ended normally")
+                    break
+
+            except asyncio.CancelledError:
+                logger.info(f"Gemini session management task cancelled for {voice_session.id}")
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"Error managing Gemini session {voice_session.id} (attempt {consecutive_errors}/{max_retries}): {e}")
+
+                # Signal initialization failure if event not yet set
+                if consecutive_errors == 1 and not voice_session.initialization_event.is_set():
+                    voice_session.initialization_event.set()
+
+                if consecutive_errors < max_retries and voice_session.active:
+                    logger.info(f"Retrying connection for {voice_session.id} in {retry_delay}s")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 30)  # Exponential backoff, max 30s
+                else:
+                    logger.error(f"Max retries reached for {voice_session.id}")
+                    break
+
+        # Cleanup
+        logger.debug(f"Cleaning up _manage_gemini_session for {voice_session.id}")
+        voice_session.gemini_session = None
+        voice_session.active = False
+
+        # Signal initialization event if not already set
+        if not voice_session.initialization_event.is_set():
+            voice_session.initialization_event.set()
+
+        # Remove from active sessions
+        if voice_session.id in self.active_sessions:
+            del self.active_sessions[voice_session.id]
+
+        # Clear resumption handle
+        self.session_resumption_handles.pop(voice_session.id, None)
+
+        logger.info(f"Gemini session {voice_session.id} management task cleaned up")
+
+    async def close_session(self, voice_session) -> None:
+        """Close Gemini session and cancel background task.
+
+        Args:
+            voice_session: VoiceSession to close
+        """
+        logger.info(f"Closing Gemini session {voice_session.id}")
+        voice_session.active = False
+
+        # Clean up management task
+        task = self.active_sessions.pop(voice_session.id, None)
+        if task and not task.done():
+            logger.info(f"Cancelling Gemini management task for {voice_session.id}")
+            task.cancel()
+            try:
+                await task
+                logger.info(f"Task for {voice_session.id} cancelled successfully")
+            except asyncio.CancelledError:
+                logger.info(f"Task for {voice_session.id} confirmed cancelled")
+            except Exception as e:
+                logger.error(f"Error cancelling task for {voice_session.id}: {e}")
+        elif task and task.done():
+            logger.info(f"Task for {voice_session.id} was already done")
+
+        # Ensure initialization event is set
+        if hasattr(voice_session, 'initialization_event') and not voice_session.initialization_event.is_set():
+            voice_session.initialization_event.set()
+
+        logger.info(f"Session {voice_session.id} closed successfully")
+
     async def send_text_input(self, session, text: str):
         """Send text input to session (for debugging)"""
         await session.send_message(types.LiveClientMessage(

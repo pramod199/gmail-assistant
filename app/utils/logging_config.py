@@ -45,11 +45,12 @@ def setup_logging():
     
     # Filter third-party library noise
     third_party_loggers = [
-        "uvicorn.access", "google", "firebase_admin", "urllib3", 
+        "uvicorn.access", "google", "firebase_admin", "urllib3",
         "urllib3.util.retry", "urllib3.connectionpool", "cachecontrol",
-        "cachecontrol.controller", "google.auth", "requests", "httpx"
+        "cachecontrol.controller", "google.auth", "requests", "httpx",
+        "websockets.client", "websockets.server"  # Reduce websocket debug noise
     ]
-    
+
     for logger_name in third_party_loggers:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
     
