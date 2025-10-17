@@ -277,7 +277,15 @@ Keep responses concise but informative. Ask for clarification when needed."""
                 # Handle audio response from server_content
                 if hasattr(response, 'server_content') and response.server_content:
                     server_content = response.server_content
-                    
+
+                    # Check for interruption (user started speaking - VAD detected)
+                    if hasattr(server_content, 'interrupted') and server_content.interrupted:
+                        logger.info(f"Gemini VAD detected user interruption - generation cancelled")
+                        response_data["type"] = "interrupted"
+                        response_data["message"] = "User interrupted - stop audio playback"
+                        yield response_data
+                        continue  # Skip processing rest of this response
+
                     # Check for audio data
                     if hasattr(server_content, 'model_turn') and server_content.model_turn:
                         model_turn = server_content.model_turn
