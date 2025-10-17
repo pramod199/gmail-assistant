@@ -25,47 +25,47 @@ class UserConfigManager:
             "updated_at": int(time.time())
         }
     
-    def get_config(self, firebase_uid: str) -> Dict[str, Any]:
+    async def get_config(self, firebase_uid: str) -> Dict[str, Any]:
         """
         Get user configuration with defaults
-        
+
         Args:
             firebase_uid: User identifier
-            
+
         Returns:
             User configuration dictionary with default values if not found
         """
         try:
             key = self._get_config_key(firebase_uid)
-            config = self.redis.get_json(key)
-            
+            config = await self.redis.get_json(key)
+
             if config is None:
                 # Return defaults if no config exists
                 logger.debug(f"No config found for user {firebase_uid}, returning defaults")
                 return self._get_default_config()
-            
+
             # Ensure all default keys exist (for backward compatibility)
             default_config = self._get_default_config()
             for key_name, default_value in default_config.items():
                 if key_name not in config and key_name not in ["created_at", "updated_at"]:
                     config[key_name] = default_value
-            
+
             logger.debug(f"Retrieved config for user {firebase_uid}: {config}")
             return config
-            
+
         except Exception as e:
             logger.error(f"Error getting config for user {firebase_uid}: {e}")
             return self._get_default_config()
     
-    def set_config(self, firebase_uid: str, config: Dict[str, Any], ttl: int = 7776000) -> bool:
+    async def set_config(self, firebase_uid: str, config: Dict[str, Any], ttl: int = 7776000) -> bool:
         """
         Set complete user configuration
-        
+
         Args:
             firebase_uid: User identifier
             config: Complete configuration dictionary
             ttl: Time to live in seconds (default: 90 days)
-            
+
         Returns:
             True if successfully stored
         """
@@ -74,86 +74,86 @@ class UserConfigManager:
             config["updated_at"] = int(time.time())
             if "created_at" not in config:
                 config["created_at"] = int(time.time())
-            
+
             key = self._get_config_key(firebase_uid)
-            success = self.redis.setex_json(key, ttl, config)
-            
+            success = await self.redis.setex_json(key, ttl, config)
+
             if success:
                 logger.info(f"Stored config for user {firebase_uid}")
             else:
                 logger.error(f"Failed to store config for user {firebase_uid}")
-            
+
             return success
-            
+
         except Exception as e:
             logger.error(f"Error setting config for user {firebase_uid}: {e}")
             return False
     
-    def update_config(self, firebase_uid: str, updates: Dict[str, Any]) -> bool:
+    async def update_config(self, firebase_uid: str, updates: Dict[str, Any]) -> bool:
         """
         Update specific configuration fields
-        
+
         Args:
             firebase_uid: User identifier
             updates: Dictionary of fields to update
-            
+
         Returns:
             True if successfully updated
         """
         try:
             # Get existing config or defaults
-            current_config = self.get_config(firebase_uid)
-            
+            current_config = await self.get_config(firebase_uid)
+
             # Apply updates
             current_config.update(updates)
             current_config["updated_at"] = int(time.time())
-            
+
             # Store updated config
-            return self.set_config(firebase_uid, current_config)
-            
+            return await self.set_config(firebase_uid, current_config)
+
         except Exception as e:
             logger.error(f"Error updating config for user {firebase_uid}: {e}")
             return False
     
-    def delete_config(self, firebase_uid: str) -> bool:
+    async def delete_config(self, firebase_uid: str) -> bool:
         """
         Delete user configuration
-        
+
         Args:
             firebase_uid: User identifier
-            
+
         Returns:
             True if successfully deleted
         """
         try:
             key = self._get_config_key(firebase_uid)
-            success = self.redis.delete(key)
-            
+            success = await self.redis.delete(key)
+
             if success:
                 logger.info(f"Deleted config for user {firebase_uid}")
-            
+
             return success
-            
+
         except Exception as e:
             logger.error(f"Error deleting config for user {firebase_uid}: {e}")
             return False
     
-    def get_config_value(self, firebase_uid: str, key: str, default: Any = None) -> Any:
+    async def get_config_value(self, firebase_uid: str, key: str, default: Any = None) -> Any:
         """
         Get specific configuration value
-        
+
         Args:
             firebase_uid: User identifier
             key: Configuration key to retrieve
             default: Default value if key not found
-            
+
         Returns:
             Configuration value or default
         """
         try:
-            config = self.get_config(firebase_uid)
+            config = await self.get_config(firebase_uid)
             return config.get(key, default)
-            
+
         except Exception as e:
             logger.error(f"Error getting config value {key} for user {firebase_uid}: {e}")
             return default

@@ -21,7 +21,7 @@ async def get_user_config(user: User = Depends(get_current_user)):
     user_id = user.id
     
     try:
-        config = config_manager.get_config(user_id)
+        config = await config_manager.get_config(user_id)
         return UserConfigResponse(**config)
         
     except Exception as e:
@@ -66,16 +66,16 @@ async def update_user_config(
             )
         
         # Update configuration
-        success = config_manager.update_config(user_id, updates)
-        
+        success = await config_manager.update_config(user_id, updates)
+
         if not success:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to update user configuration"
             )
-        
+
         # Return updated configuration
-        updated_config = config_manager.get_config(user_id)
+        updated_config = await config_manager.get_config(user_id)
         return UserConfigResponse(**updated_config)
         
     except HTTPException:
@@ -96,7 +96,7 @@ async def delete_user_config(user: User = Depends(get_current_user)):
     user_id = user.id
 
     try:
-        success = config_manager.delete_config(user_id)
+        success = await config_manager.delete_config(user_id)
 
         if not success:
             raise HTTPException(
@@ -136,7 +136,7 @@ async def get_config_value(config_key: str, user: User = Depends(get_current_use
         )
 
     try:
-        value = config_manager.get_config_value(user_id, config_key)
+        value = await config_manager.get_config_value(user_id, config_key)
 
         return ConfigValueResponse(
             key=config_key,
