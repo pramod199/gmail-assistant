@@ -378,6 +378,14 @@ class VoiceWebSocketHandler:
                             "message": "Gmail operation completed"
                         })
 
+                    elif response_type == "interrupted":
+                        # Gemini VAD detected user interruption - signal client to stop audio playback
+                        logger.info(f"Gemini VAD interruption detected for user {user_id} - notifying client")
+                        await send_json_safe(websocket, {
+                            "type": "stop_audio",
+                            "message": "User interrupted - clear audio queue"
+                        })
+
                     elif response_type == "session_resumption_update":
                         # Handle session resumption updates from Gemini
                         resumption_data = response.get("resumption_data", {})
