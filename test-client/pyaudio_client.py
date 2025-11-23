@@ -15,7 +15,6 @@ import pyaudio
 import aiohttp
 import requests
 import getpass
-import numpy as np
 from typing import Optional
 
 # Audio configuration
@@ -25,10 +24,6 @@ CHANNELS = 1
 INPUT_RATE = 16000
 OUTPUT_RATE = 24000
 BUFFER_DURATION = 1.5  # Send chunks every 1.5 seconds (was 0.5s)
-
-# Interruption detection settings
-INTERRUPTION_THRESHOLD = 500  # Audio level threshold for detecting user speech
-INTERRUPTION_SAMPLE_COUNT = 1  # Number of consecutive samples above threshold to trigger interruption
 
 # Server configuration
 API_BASE_URL = "http://localhost:8000/api"
@@ -108,16 +103,13 @@ class GmailVoiceClient:
         self.response_queue = queue.Queue()
         self.running = True
         self.websocket = None
-        self.is_playing_audio = False  # Track if audio is currently playing
-        self.samples_above_threshold = 0  # Counter for interruption detection
 
         print(f"🔊 Gmail Voice Client initialized")
         print(f"👤 User ID: {firebase_user_id}")
         print(f"⏱️  Buffer duration: {BUFFER_DURATION}s (server-side VAD enabled)")
-        print(f"🎯 Interruption enabled (threshold: {INTERRUPTION_THRESHOLD}, samples: {INTERRUPTION_SAMPLE_COUNT})")
     
     def start_recording(self):
-        """Start recording audio from microphone with interruption detection"""
+        """Start recording audio from microphone"""
         def record_audio():
             stream = self.audio.open(
                 format=FORMAT,
@@ -127,30 +119,12 @@ class GmailVoiceClient:
                 frames_per_buffer=CHUNK
             )
 
-            print("🎤 Recording started (with barge-in interruption detection)...")
+            print("🎤 Recording started...")
 
             while self.running:
                 try:
                     data = stream.read(CHUNK, exception_on_overflow=False)
                     self.audio_queue.put(data)
-
-                    # Detect interruption: check audio level when assistant is speaking
-                    if self.is_playing_audio:
-                        # Convert bytes to numpy array for level calculation
-                        audio_array = np.frombuffer(data, dtype=np.int16)
-                        audio_level = np.abs(audio_array).mean()
-
-                        if audio_level > INTERRUPTION_THRESHOLD:
-                            self.samples_above_threshold += 1
-
-                            # If enough consecutive samples are above threshold, trigger interruption
-                            if self.samples_above_threshold >= INTERRUPTION_SAMPLE_COUNT:
-                                print(f"🚨 Interruption detected! (level: {audio_level:.0f})")
-                                self._handle_interruption()
-                                self.samples_above_threshold = 0  # Reset counter
-                        else:
-                            self.samples_above_threshold = 0  # Reset if below threshold
-
                 except:
                     break
 
@@ -160,19 +134,8 @@ class GmailVoiceClient:
 
         threading.Thread(target=record_audio, daemon=True).start()
 
-    def _handle_interruption(self):
-        """Handle user interruption - stop audio playback immediately"""
-        # Clear the response queue to stop playing queued audio
-        while not self.response_queue.empty():
-            try:
-                self.response_queue.get_nowait()
-            except queue.Empty:
-                break
-
-        print("🔇 Audio playback interrupted (Gemini VAD will handle new input)")
-    
     def start_playback(self):
-        """Start playing audio responses with interruption tracking"""
+        """Start playing audio responses"""
         def play_audio():
             stream = self.audio.open(
                 format=FORMAT,
@@ -187,13 +150,8 @@ class GmailVoiceClient:
             while self.running:
                 try:
                     audio_data = self.response_queue.get(timeout=0.1)
-                    self.is_playing_audio = True  # Mark that we're playing audio
                     stream.write(audio_data)
-                    # Check if queue is empty to update playing state
-                    if self.response_queue.empty():
-                        self.is_playing_audio = False
                 except queue.Empty:
-                    self.is_playing_audio = False  # No audio to play
                     continue
                 except:
                     break
