@@ -7,8 +7,9 @@
 4. [Application Flow](#application-flow)
 5. [WebSocket Flow](#websocket-flow)
 6. [API Endpoints](#api-endpoints)
-7. [Error Handling](#error-handling)
-8. [Code Examples](#code-examples)
+7. [User Configuration](#user-configuration)
+8. [Error Handling](#error-handling)
+9. [Code Examples](#code-examples)
 
 ---
 
@@ -21,6 +22,13 @@ The Gmail Voice Assistant is a voice-first email management system with three di
 3. **Session Management** - Voice session lifecycle
 
 **Base URL:** `http://localhost:8000` (development)
+
+**Key Features:**
+- Real-time voice streaming with Gemini Live API
+- Server-side Voice Activity Detection (VAD) for interruption handling
+- User-configurable email behavior (auto mark as read, auto send drafts)
+- Multi-user session management
+- Automatic token refresh
 
 ---
 
@@ -468,6 +476,57 @@ Gmail OAuth = **What you can access** (grants Gmail permissions)
        │◄────────────────────────────────────────────────┤
 ```
 
+### Server-Side VAD Interruption Handling
+
+```
+┌─────────────┐                                    ┌─────────────┐
+│   Client    │                                    │   Server    │
+└──────┬──────┘                                    └──────┬──────┘
+       │                                                  │
+       │ ┌──────────────────────────────────────┐        │
+       │ │  USER INTERRUPTS ASSISTANT           │        │
+       │ └──────────────────────────────────────┘        │
+       │                                                  │
+       │ Assistant is speaking...                        │
+       │ Playing audio response                          │
+       │                                                  │
+       │ User starts speaking (interruption)             │
+       │                                                  │
+       │ Continue sending audio chunks                   │
+       ├────────────────────────────────────────────────>│
+       │                                                  │
+       │                                                  │ Gemini Live API
+       │                                                  │ VAD detects user
+       │                                                  │ speaking
+       │                                                  │
+       │                                                  │ server_content.
+       │                                                  │ interrupted = true
+       │                                                  │
+       │ {"type": "stop_audio",                          │
+       │  "message": "User interrupted"}                 │
+       │◄────────────────────────────────────────────────┤
+       │                                                  │
+       │ IMMEDIATELY:                                    │
+       │ - Stop audio playback                           │
+       │ - Clear audio queue                             │
+       │ - Ready for new response                        │
+       │                                                  │
+       │                                                  │ Process new
+       │                                                  │ user input
+       │                                                  │
+       │ {"type": "audio_response",                      │
+       │  "data": "new_response_audio"}                  │
+       │◄────────────────────────────────────────────────┤
+       │                                                  │
+       │ Play new response                               │
+```
+
+**Key Points:**
+- **Server-side detection:** Gemini Live API's VAD detects interruptions automatically
+- **No client-side monitoring:** Client doesn't need to monitor audio levels
+- **Immediate response:** Client receives `stop_audio` message and clears playback queue
+- **Natural conversation:** Enables barge-in/interruption for natural voice interaction
+
 ### Error Handling in WebSocket
 
 ```
@@ -803,12 +862,127 @@ ws://localhost:8000/api/voice/voice?session_id=<id>&firebase_user_id=<uid>
 
 ```json
 {
+  "type": "stop_audio",
+  "message": "User interrupted - clear audio queue"
+}
+```
+**Action Required:** Immediately stop audio playback and clear audio queue
+
+```json
+{
   "type": "error",
   "message": "Gmail authorization required",
   "action_required": "gmail_auth",
   "auth_url": "/api/auth/gmail/authorize"
 }
 ```
+
+---
+
+## User Configuration
+
+User configuration allows customization of email handling behavior for each user.
+
+### Configuration Options
+
+#### auto_mark_as_read (boolean)
+- **Default:** `true`
+- **Description:** Automatically mark emails as read when they are read aloud
+- **When enabled:** Emails are marked as read immediately after reading
+- **When disabled:** Emails remain unread unless explicitly marked
+
+#### auto_send_drafts (boolean)
+- **Default:** `false`
+- **Description:** Automatically send draft emails immediately vs saving to Gmail drafts
+- **When enabled:** Draft emails are sent immediately upon creation
+- **When disabled:** Draft emails are saved to Gmail drafts folder for review
+
+### Configuration Endpoints
+
+#### 1. Get User Configuration
+
+```http
+GET /api/config/user/config
+Authorization: Bearer <firebase_token>
+```
+
+**Response:**
+```json
+{
+  "auto_mark_as_read": true,
+  "auto_send_drafts": false,
+  "created_at": 1736510400,
+  "updated_at": 1736510400
+}
+```
+
+#### 2. Update User Configuration
+
+```http
+PUT /api/config/user/config
+Authorization: Bearer <firebase_token>
+Content-Type: application/json
+
+{
+  "auto_mark_as_read": false,
+  "auto_send_drafts": true
+}
+```
+
+**Request Body:** (all fields optional - only provide fields to update)
+
+**Response:**
+```json
+{
+  "auto_mark_as_read": false,
+  "auto_send_drafts": true,
+  "created_at": 1736510400,
+  "updated_at": 1736514000
+}
+```
+
+**Validation:**
+- Both fields must be boolean values
+- At least one field must be provided
+- Invalid field names or types return 400 error
+
+#### 3. Get Specific Configuration Value
+
+```http
+GET /api/config/user/config/{config_key}
+Authorization: Bearer <firebase_token>
+```
+
+**Valid config_key values:**
+- `auto_mark_as_read`
+- `auto_send_drafts`
+
+**Response:**
+```json
+{
+  "key": "auto_mark_as_read",
+  "value": true,
+  "user_id": "firebase_uid"
+}
+```
+
+#### 4. Delete User Configuration
+
+```http
+DELETE /api/config/user/config
+Authorization: Bearer <firebase_token>
+```
+
+**Response:**
+```json
+{
+  "message": "User configuration deleted successfully",
+  "user_id": "firebase_uid",
+  "note": "Default configuration values will be used going forward"
+}
+```
+
+**Effect:** User reverts to default configuration values
 
 ---
 
@@ -1078,21 +1252,44 @@ async function main() {
 - **Session TTL:** 24 hours
 - **Firebase Token TTL:** 1 hour
 - **Gmail Refresh Token TTL:** 30 days (in Redis)
+- **User Config TTL:** 90 days (in Redis)
 - **WebSocket Ping Interval:** 30 seconds
 - **WebSocket Timeout:** 10 seconds
+- **Gemini HTTP Timeout:** 5 minutes (300000ms)
 
 ---
 
 ## Best Practices
 
+### Authentication & Authorization
 1. **Always include Firebase token** in Authorization header for protected endpoints
 2. **Check Gmail authorization** before attempting voice session
 3. **Handle token expiration** gracefully and re-authenticate
 4. **Verify authorization completion** after displaying OAuth URL
-5. **Clean up sessions** when done (DELETE /api/sessions/{id})
-6. **Handle WebSocket disconnections** and reconnect if needed
-7. **Monitor session state** messages to track navigation
-8. **Display errors to users** when Gmail re-auth is required
+5. **Store tokens securely** (use httpOnly cookies or secure storage)
+
+### Session Management
+6. **Clean up sessions** when done (DELETE /api/sessions/{id})
+7. **Handle WebSocket disconnections** and reconnect if needed
+8. **Monitor session state** messages to track navigation
+9. **Limit concurrent sessions** (max 3 per user)
+
+### Audio Handling
+10. **Use correct audio formats** (16kHz input, 24kHz output, PCM, mono)
+11. **Implement stop_audio handling** to stop playback on interruption
+12. **Clear audio queue** immediately when stop_audio received
+13. **Handle Web Audio API properly** (request microphone permission)
+
+### Error Handling
+14. **Display errors to users** when Gmail re-auth is required
+15. **Handle network failures** gracefully with retry logic
+16. **Validate responses** before processing
+
+### User Experience
+17. **Show configuration options** to users (auto_mark_as_read, auto_send_drafts)
+18. **Provide visual feedback** for connection status
+19. **Display session state** (current message X of Y)
+20. **Handle interruptions smoothly** with immediate audio stop
 
 ---
 
