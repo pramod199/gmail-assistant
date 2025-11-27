@@ -791,6 +791,7 @@ ws://localhost:8000/api/voice/voice?session_id=<id>&firebase_user_id=<uid>
 
 **Client → Server Messages:**
 
+**Control Messages (JSON text):**
 ```json
 {
   "type": "start_voice_session"
@@ -799,14 +800,25 @@ ws://localhost:8000/api/voice/voice?session_id=<id>&firebase_user_id=<uid>
 
 ```json
 {
-  "type": "audio_chunk",
-  "data": "base64_encoded_pcm_audio",
-  "audio_format": {
-    "sample_rate": 16000,
-    "channels": 1,
-    "mime_type": "audio/pcm;rate=16000"
-  }
+  "type": "end_voice_session"
 }
+```
+
+**Audio Data (Raw Binary):**
+```
+Send raw PCM16 audio bytes directly via WebSocket binary frames
+- Format: 16-bit signed integers (little-endian)
+- Sample Rate: 16000 Hz
+- Channels: 1 (mono)
+- No base64 encoding - send raw bytes
+
+Web Audio API Conversion Example:
+const pcm16 = new Int16Array(float32Array.length);
+for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+}
+websocket.send(pcm16.buffer);
 ```
 
 **Server → Client Messages:**
@@ -826,11 +838,13 @@ ws://localhost:8000/api/voice/voice?session_id=<id>&firebase_user_id=<uid>
 }
 ```
 
-```json
-{
-  "type": "audio_response",
-  "data": "base64_encoded_pcm_audio"
-}
+**Audio Response (Raw Binary):**
+```
+Raw PCM16 audio bytes sent via WebSocket binary frames
+- Format: 16-bit signed integers (little-endian)
+- Sample Rate: 24000 Hz (Gemini Live API default output)
+- Channels: 1 (mono)
+- No base64 encoding - raw bytes
 ```
 
 ```json
