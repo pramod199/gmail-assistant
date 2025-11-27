@@ -1,9 +1,10 @@
 import json
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from starlette.websockets import WebSocketState
 
 from app.routers.websocket import VoiceWebSocketHandler
-from app.routers.websocket_helpers import safe_websocket_close, send_json_safe
+from app.routers.websocket_helpers import safe_websocket_close, send_json_safe, is_websocket_connected
 from app.services.voice_session_manager import voice_session_manager
 
 logger = logging.getLogger(__name__)
@@ -49,27 +50,52 @@ async def voice_websocket_endpoint(
         # Message processing loop for this session
         while True:
             try:
-                raw_message = await websocket.receive_text()
-                message = json.loads(raw_message)
+                # Receive either text (control messages) or bytes (audio data)
+                message_data = await websocket.receive()
 
-                # Process message for this specific user and session
-                await voice_handler.handle_message(websocket, user_id, session_id, message)
+                # Check for disconnect message
+                if message_data.get("type") == "websocket.disconnect":
+                    logger.info(f"WebSocket disconnect signal received for user {user_id}, session {session_id}")
+                    break
+
+                if "text" in message_data:
+                    # Handle control messages (JSON)
+                    raw_message = message_data["text"]
+                    message = json.loads(raw_message)
+                    await voice_handler.handle_message(websocket, user_id, session_id, message)
+
+                elif "bytes" in message_data:
+                    # Handle audio data (raw binary)
+                    audio_bytes = message_data["bytes"]
+                    await voice_handler.handle_audio_bytes(websocket, user_id, session_id, audio_bytes)
 
             except WebSocketDisconnect:
                 logger.info(f"WebSocket disconnected for user {user_id}, session {session_id}")
                 break
+
+            except RuntimeError as e:
+                # Handle "Cannot call receive once a disconnect message has been received" error
+                if "disconnect" in str(e).lower():
+                    logger.info(f"WebSocket already disconnected for user {user_id}, session {session_id}")
+                else:
+                    logger.error(f"Runtime error for user {user_id}, session {session_id}: {e}")
+                break
+
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON from user {user_id}: {e}")
                 await send_json_safe(websocket, {
                     "type": "error",
                     "message": "Invalid JSON format"
                 })
+                # Continue processing other messages
+
             except Exception as e:
                 logger.error(f"Message processing error for user {user_id}, session {session_id}: {e}")
                 await send_json_safe(websocket, {
                     "type": "error",
                     "message": f"Processing error: {str(e)}"
                 })
+                break
 
     except Exception as e:
         logger.error(f"WebSocket connection failed for session {session_id}: {e}")

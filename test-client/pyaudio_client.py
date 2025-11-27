@@ -163,75 +163,65 @@ class GmailVoiceClient:
         threading.Thread(target=play_audio, daemon=True).start()
     
     async def audio_sender(self):
-        """Send audio chunks to WebSocket every 1.5 seconds"""
+        """Send audio chunks to WebSocket every 1.5 seconds as raw binary"""
         audio_buffer = b""
         chunk_size = int(INPUT_RATE * BUFFER_DURATION * 2)  # 1.5s of 16kHz 16-bit audio
-        
-        print(f"📤 Audio sender started (sending every {BUFFER_DURATION}s)...")
-        
+
+        print(f"📤 Audio sender started (sending raw binary every {BUFFER_DURATION}s)...")
+
         while self.running and self.websocket:
             while not self.audio_queue.empty():
                 data = self.audio_queue.get_nowait()
                 audio_buffer += data
-                
+
                 if len(audio_buffer) >= chunk_size:
-                    # Encode audio data as base64
-                    encoded_audio = base64.b64encode(audio_buffer).decode('utf-8')
-                    
-                    # Send audio chunk message
-                    message = {
-                        "type": "audio_chunk",
-                        "data": encoded_audio,
-                        "audio_format": {
-                            "sample_rate": INPUT_RATE,
-                            "channels": CHANNELS,
-                            "mime_type": f"audio/pcm;rate={INPUT_RATE}"
-                        }
-                    }
-                    
-                    await self.websocket.send(json.dumps(message))
+                    # Send raw audio bytes directly (no base64 encoding)
+                    await self.websocket.send(audio_buffer)
                     print(f"📤 Sent audio chunk: {len(audio_buffer)} bytes ({BUFFER_DURATION}s)")
                     audio_buffer = b""
-            
+
             await asyncio.sleep(0.05)
-        
+
         print("📤 Audio sender stopped")
     
     async def message_receiver(self):
-        """Receive and process messages from WebSocket"""
+        """Receive and process messages from WebSocket (both text and binary)"""
         print("📥 Message receiver started...")
-        
+
         while self.running and self.websocket:
             try:
                 raw_message = await self.websocket.recv()
+
+                # Check if it's binary (audio) or text (control messages)
+                if isinstance(raw_message, bytes):
+                    # Raw audio bytes received
+                    if raw_message:
+                        self.response_queue.put(raw_message)
+                        print(f"📥 Received audio response: {len(raw_message)} bytes")
+                    continue
+
+                # Text message - parse as JSON
                 message = json.loads(raw_message)
                 message_type = message.get("type")
-                
+
                 if message_type == "connected":
                     print(f"✅ Connected: {message.get('message')}")
                     print(f"👤 User ID: {message.get('user_id')}")
-                    
+
                     # Start voice session
                     await self.websocket.send(json.dumps({"type": "start_voice_session"}))
                     print("🎙️ Voice session started")
-                
+
                 elif message_type == "voice_session_started":
                     print(f"🎙️ {message.get('message')}")
-                
-                elif message_type == "audio_response":
-                    # Decode and queue audio response
-                    audio_data = base64.b64decode(message.get("data", ""))
-                    if audio_data:
-                        self.response_queue.put(audio_data)
-                        print(f"📥 Received audio response: {len(audio_data)} bytes")
-                
+
                 elif message_type == "text_response":
                     print(f"💬 Assistant: {message.get('text')}")
-                
+
                 elif message_type == "function_executed":
                     function_name = message.get("function_name")
                     print(f"⚡ Executed: {function_name}")
-                
+
                 elif message_type == "session_state":
                     current = message.get("current_index", 0)
                     total = message.get("total_messages", 0)
@@ -252,14 +242,14 @@ class GmailVoiceClient:
 
                 else:
                     print(f"❓ Unknown message type: {message_type}")
-                
+
             except websockets.exceptions.ConnectionClosed:
                 print("🔌 WebSocket connection closed")
                 break
             except Exception as e:
                 print(f"📥 Message receiver error: {e}")
                 break
-        
+
         print("📥 Message receiver stopped")
     
     async def create_session(self) -> bool:

@@ -12,7 +12,7 @@ from app.services.gmail_service import GmailService
 from app.services.session_service import SessionManager
 from app.services.voice_session_manager import voice_session_manager
 from app.services.gmail_oauth_service import UserCredentialStore
-from .websocket_helpers import safe_websocket_close, is_websocket_connected, send_json_safe
+from .websocket_helpers import safe_websocket_close, is_websocket_connected, send_json_safe, send_bytes_safe
 
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,27 @@ class VoiceWebSocketHandler:
             await safe_websocket_close(websocket, code=4000, reason="Connection failed")
             return None
     
+    async def handle_audio_bytes(self, websocket: WebSocket, user_id: str, session_id: str, audio_bytes: bytes):
+        """Process incoming audio bytes"""
+        try:
+            voice_session = voice_session_manager.get_cached_session(session_id)
+
+            if not voice_session:
+                await send_json_safe(websocket, {
+                    "type": "error",
+                    "message": "Session not found"
+                })
+                return
+
+            await self._process_audio_chunk(websocket, user_id, voice_session, audio_bytes)
+
+        except Exception as e:
+            logger.error(f"Audio handling error for user {user_id}: {e}")
+            await send_json_safe(websocket, {
+                "type": "error",
+                "message": f"Error processing audio: {str(e)}"
+            })
+
     async def handle_message(self, websocket: WebSocket, user_id: str, session_id: str, message: Dict[str, Any]):
         """Process incoming WebSocket message"""
         try:
@@ -111,9 +132,6 @@ class VoiceWebSocketHandler:
 
             if message_type == "start_voice_session":
                 await self._start_voice_session(websocket, user_id, voice_session)
-
-            elif message_type == "audio_chunk":
-                await self._process_audio_chunk(websocket, user_id, voice_session, message)
 
             elif message_type == "end_voice_session":
                 await self._end_voice_session(websocket, user_id, voice_session)
@@ -167,7 +185,7 @@ class VoiceWebSocketHandler:
             })
     
     async def _process_audio_chunk(self, websocket: WebSocket, user_id: str,
-                                 voice_session, message: Dict[str, Any]):
+                                 voice_session, audio_bytes: bytes):
         """Process audio chunk from client"""
         try:
             gemini_session = voice_session.gemini_session
@@ -178,25 +196,17 @@ class VoiceWebSocketHandler:
                 })
                 return
 
-            # Extract audio data
-            audio_data = message.get("data")  # Base64 encoded audio
-            audio_format = message.get("audio_format", {})
-            mime_type = audio_format.get("mime_type", "audio/pcm;rate=16000")
-
-            if not audio_data:
+            if not audio_bytes:
                 return  # Ignore empty chunks
 
-            # Decode base64 audio data
-            import base64
-            audio_bytes = base64.b64decode(audio_data)
-
-            # Send to Gemini Live API
+            # Send to Gemini Live API with default mime type
+            mime_type = "audio/pcm;rate=16000"
             gemini_client: GeminiLiveClient = voice_session.gemini_client
             await gemini_client.send_audio_chunk(gemini_session, audio_bytes, mime_type)
 
         except Exception as e:
             logger.error(f"Audio processing error for user {user_id}: {e}")
-            await websocket.send_json({
+            await send_json_safe(websocket, {
                 "type": "error",
                 "message": f"Audio processing error: {str(e)}"
             })
@@ -351,17 +361,10 @@ class VoiceWebSocketHandler:
                 
                 try:
                     if response_type == "audio":
-                        # Stream audio response back to client
+                        # Stream audio response back to client as raw bytes
                         audio_data = response.get("audio_data")
                         if audio_data:
-                            import base64
-                            encoded_audio = base64.b64encode(audio_data).decode('utf-8')
-
-                            await send_json_safe(websocket, {
-                                "type": "audio_response",
-                                "data": encoded_audio,
-                                "format": "audio/pcm;rate=24000"
-                            })
+                            await send_bytes_safe(websocket, audio_data)
 
                     elif response_type == "text":
                         # Send text response (for debugging)
