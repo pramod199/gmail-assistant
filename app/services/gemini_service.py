@@ -160,13 +160,6 @@ class GeminiLiveClient:
             
             # Realtime input configuration with improved VAD for better speech recognition
             realtime_input_config=types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=False,                                          # Enable VAD
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,  # Detect speech start quickly with continuous audio
-                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,         # Wait longer for silence (KEY!)
-                    silence_duration_ms=2000,                               # Wait 2s of silence — room for natural mid-sentence pauses
-                    prefix_padding_ms=300                                    # Include 300ms before speech starts
-                )
             ),
             
             # System instruction for Gmail assistant behavior

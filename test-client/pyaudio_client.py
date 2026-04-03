@@ -428,6 +428,7 @@ async def main():
         print("   - 'Summarize this message'")
         print("   - 'Mark as read'")
         print("   - 'Draft a reply saying thanks'")
+        print("\n🎧 Use headphones for best experience (speakers cause echo feedback)")
         print("\n⏹️  Press Ctrl+C to quit")
         print("-" * 60)
         
