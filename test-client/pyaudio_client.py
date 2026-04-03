@@ -2,7 +2,7 @@
 """
 PyAudio Streaming Client for Gmail Voice Assistant
 Connects to our WebSocket voice endpoint instead of directly to Gemini Live API
-Server-side VAD is enabled, so audio isolation is removed for testing
+Audio is streamed continuously in small chunks — Gemini server-side VAD handles detection.
 """
 
 import asyncio
@@ -23,7 +23,7 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 INPUT_RATE = 16000
 OUTPUT_RATE = 24000
-BUFFER_DURATION = 1.5  # Send chunks every 1.5 seconds (was 0.5s)
+SEND_CHUNK_BYTES = 1024  # 512 samples × 2 bytes = 32ms at 16kHz (matches Gemini's frame size)
 
 # Server configuration
 API_BASE_URL = "http://localhost:8000/api"
@@ -106,7 +106,7 @@ class GmailVoiceClient:
 
         print(f"🔊 Gmail Voice Client initialized")
         print(f"👤 User ID: {firebase_user_id}")
-        print(f"⏱️  Buffer duration: {BUFFER_DURATION}s (server-side VAD enabled)")
+        print(f"🎙️  Streaming continuously — Gemini VAD handles speech detection")
     
     def start_recording(self):
         """Start recording audio from microphone"""
@@ -163,24 +163,20 @@ class GmailVoiceClient:
         threading.Thread(target=play_audio, daemon=True).start()
     
     async def audio_sender(self):
-        """Send audio chunks to WebSocket every 1.5 seconds as raw binary"""
-        audio_buffer = b""
-        chunk_size = int(INPUT_RATE * BUFFER_DURATION * 2)  # 1.5s of 16kHz 16-bit audio
+        """Stream all audio continuously in 32ms chunks — Gemini server-side VAD handles detection."""
+        raw_buffer = b""
 
-        print(f"📤 Audio sender started (sending raw binary every {BUFFER_DURATION}s)...")
+        print("🎤 Audio sender started — streaming to Gemini VAD...")
 
         while self.running and self.websocket:
             while not self.audio_queue.empty():
-                data = self.audio_queue.get_nowait()
-                audio_buffer += data
+                raw_buffer += self.audio_queue.get_nowait()
 
-                if len(audio_buffer) >= chunk_size:
-                    # Send raw audio bytes directly (no base64 encoding)
-                    await self.websocket.send(audio_buffer)
-                    print(f"📤 Sent audio chunk: {len(audio_buffer)} bytes ({BUFFER_DURATION}s)")
-                    audio_buffer = b""
+            while len(raw_buffer) >= SEND_CHUNK_BYTES:
+                await self.websocket.send(raw_buffer[:SEND_CHUNK_BYTES])
+                raw_buffer = raw_buffer[SEND_CHUNK_BYTES:]
 
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.005)
 
         print("📤 Audio sender stopped")
     
