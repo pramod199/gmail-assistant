@@ -37,20 +37,39 @@ class VoiceWebSocketHandler:
 
             # Validate voice session exists and is active
             voice_session = await voice_session_manager.get_session(session_id)
+
+            # Auto-recreate session if not found or inactive (handles server restart)
             if not voice_session or not voice_session.active:
-                await safe_websocket_close(websocket, code=4003, reason="Invalid or expired session")
-                logger.warning(f"WebSocket connection attempt with invalid session: {session_id}")
-                return None
+                old_session_id = session_id
+                logger.info(f"Session {old_session_id} not found or inactive, creating new session for user {user_id}")
 
-            # Validate session ownership
-            if voice_session.user_id != user_id:
-                await safe_websocket_close(websocket, code=4004, reason="Unauthorized session access")
-                logger.warning(f"User {user_id} attempted to access session {session_id} owned by {voice_session.user_id}")
-                return None
+                # Accept WebSocket first so we can send the new session ID
+                await websocket.accept()
 
-            # Accept WebSocket connection
-            await websocket.accept()
-            logger.info(f"WebSocket accepted for user {user_id}, session {session_id}")
+                # Create new session
+                voice_session = await voice_session_manager.create_session(user_id=user_id)
+                session_id = voice_session.id
+
+                logger.info(f"Created new session {session_id} for user {user_id} (replaced {old_session_id})")
+
+                # Notify client of new session ID
+                await send_json_safe(websocket, {
+                    "type": "session_recreated",
+                    "message": "New session created (previous session was closed or expired)",
+                    "old_session_id": old_session_id,
+                    "new_session_id": session_id,
+                    "user_id": user_id
+                })
+            else:
+                # Validate session ownership
+                if voice_session.user_id != user_id:
+                    await safe_websocket_close(websocket, code=4004, reason="Unauthorized session access")
+                    logger.warning(f"User {user_id} attempted to access session {session_id} owned by {voice_session.user_id}")
+                    return None
+
+                # Accept WebSocket connection
+                await websocket.accept()
+                logger.info(f"WebSocket accepted for user {user_id}, session {session_id}")
 
             # Get user's Gmail credentials from Redis
             gmail_credentials = await self.credential_store.get_credentials(user_id)

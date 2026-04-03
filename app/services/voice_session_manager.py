@@ -125,19 +125,24 @@ class VoiceSessionManager:
         """Get a session by ID, loading from Redis if needed."""
         # Check in-memory cache first
         if session_id in self._active_sessions:
+            logger.debug(f"Session {session_id} found in memory cache")
             return self._active_sessions[session_id]
 
         # Load from Redis
         session_key = await self._get_session_key(session_id)
+        logger.debug(f"Looking for session in Redis with key: {session_key}")
         session_json = await redis_service.get(session_key)
 
         if not session_json:
+            logger.warning(f"Session {session_id} not found in Redis (key: {session_key})")
             return None
 
         try:
+            logger.debug(f"Loading session {session_id} from Redis")
             session_data = VoiceSessionData.model_validate_json(session_json)
             session = VoiceSession(session_data)
             self._active_sessions[session_id] = session
+            logger.info(f"Successfully loaded session {session_id} from Redis")
             return session
         except Exception as e:
             logger.error(f"Failed to load session {session_id} from Redis: {e}")

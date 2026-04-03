@@ -33,7 +33,7 @@ class GeminiLiveClient:
         logger.info(f"Setting Gemini HTTP timeout to {timeout_ms}ms ({timeout_ms/60000:.1f} minutes)")
         http_options = genai.types.HttpOptions(timeout=timeout_ms)
         self.client = genai.Client(api_key=api_key, http_options=http_options)
-        self.model = "gemini-2.5-flash-live-preview"
+        self.model = "gemini-3.1-flash-live-preview"
         
         # Function definitions for Gmail operations
         self.functions = [
@@ -162,9 +162,9 @@ class GeminiLiveClient:
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     disabled=False,                                          # Enable VAD
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,  # Detect speech start quickly
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,  # Detect speech start quickly with continuous audio
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,         # Wait longer for silence (KEY!)
-                    silence_duration_ms=1200,                               # Wait 1.2s of silence before processing (CRITICAL!)
+                    silence_duration_ms=2000,                               # Wait 2s of silence — room for natural mid-sentence pauses
                     prefix_padding_ms=300                                    # Include 300ms before speech starts
                 )
             ),
