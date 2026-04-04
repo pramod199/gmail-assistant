@@ -36,7 +36,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
   const [personaId, setPersonaId] = useState("default");
   const [voiceName, setVoiceName] = useState("");
   const [presetId, setPresetId] = useState("");
-  const [language, setLanguage] = useState("English");
   const [enableTranscription, setEnableTranscription] = useState(true);
 
   const [loading, setLoading] = useState(true);
@@ -58,7 +57,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
 
         setPersonaId(cur.persona_id);
         setVoiceName(cur.voice_name);
-        setLanguage(cur.language);
         setEnableTranscription(cur.enable_transcription);
 
         // Detect if the stored custom_instructions matches a preset
@@ -79,7 +77,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
     persona_id: string;
     voice_name: string;
     custom_instructions: string;
-    language: string;
     enable_transcription: boolean;
   }) {
     setSaving(true);
@@ -89,7 +86,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
         persona_id: next.persona_id,
         voice_name: next.voice_name || undefined,
         custom_instructions: next.custom_instructions || undefined,
-        language: next.language,
         enable_transcription: next.enable_transcription,
       });
       setCurrent(updated);
@@ -144,7 +140,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
               persona_id: v,
               voice_name: "",
               custom_instructions: presetId,
-              language,
               enable_transcription: enableTranscription,
             });
           }}
@@ -178,7 +173,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
               persona_id: personaId,
               voice_name: v,
               custom_instructions: presetId,
-              language,
               enable_transcription: enableTranscription,
             });
           }}
@@ -210,7 +204,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
               persona_id: personaId,
               voice_name: voiceName,
               custom_instructions: v,
-              language,
               enable_transcription: enableTranscription,
             });
           }}
@@ -225,27 +218,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
         </select>
       </div>
 
-      {/* Language */}
-      <div className="space-y-1.5">
-        <label className="text-xs uppercase tracking-wider text-gray-500">Language</label>
-        <input
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-          onBlur={() =>
-            save({
-              persona_id: personaId,
-              voice_name: voiceName,
-              custom_instructions: presetId,
-              language,
-              enable_transcription: enableTranscription,
-            })
-          }
-          maxLength={50}
-          placeholder="English"
-          className="w-full px-3 py-2 text-sm bg-gray-950 border border-gray-800 rounded text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-600"
-        />
-      </div>
-
       {/* Transcription toggle */}
       <label className="flex items-center gap-2 text-sm text-gray-300">
         <input
@@ -258,7 +230,6 @@ export function SettingsPanel({ token, onClose, onSaved }: SettingsPanelProps) {
               persona_id: personaId,
               voice_name: voiceName,
               custom_instructions: presetId,
-              language,
               enable_transcription: v,
             });
           }}

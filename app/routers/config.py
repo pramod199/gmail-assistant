@@ -34,11 +34,7 @@ def _resolve_voice_persona(raw: dict) -> VoicePersonaResponse:
         voice_name=voice_name,
         custom_instructions=custom_instructions,
         persona_name=persona_name,
-        language=(
-            raw.get("language")
-            or persona.get("default_language")
-            or "Match user's language"
-        ),
+        language=persona.get("default_language") or "Match user's language",
         enable_transcription=raw.get("enable_transcription", True),
         persona_description=persona["description"],
         persona_style_prompt=persona["style_prompt"],
@@ -110,6 +106,16 @@ async def update_voice_persona(
         # Merge with existing voice_persona config
         config = await config_manager.get_config(user_id)
         current_vp = config.get("voice_persona", {})
+
+        # When switching persona, drop any stale voice override so the new persona's
+        # default_voice takes effect — unless the request explicitly supplies a new voice.
+        if (
+            "persona_id" in updates
+            and updates["persona_id"] != current_vp.get("persona_id")
+            and "voice_name" not in updates
+        ):
+            current_vp["voice_name"] = None
+
         current_vp.update(updates)
 
         success = await config_manager.update_config(user_id, {"voice_persona": current_vp})

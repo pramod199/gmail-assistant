@@ -356,10 +356,6 @@ export function VoiceInterface({
                 <span className="text-gray-500">Voice</span>
                 <span className="font-medium">{persona.voice_name}</span>
               </span>
-              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-gray-300">
-                <span className="text-gray-500">Lang</span>
-                <span className="font-medium">{persona.language}</span>
-              </span>
               {persona.custom_instructions && (
                 <span
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-gray-300 max-w-[260px] truncate"

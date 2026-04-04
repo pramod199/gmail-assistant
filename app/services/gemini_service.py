@@ -44,11 +44,9 @@ class GeminiLiveClient:
         self.resolved_persona_instructions = (
             persona.get("persona_instructions") or persona["style_prompt"]
         )
-        # User-set language overrides persona default. If neither is set, no language
-        # directive is emitted and the model simply mirrors the user's spoken language.
-        self.resolved_language = (
-            self.voice_persona.get("language") or persona.get("default_language")
-        )
+        # Persona default_language is authoritative (language is no longer user-configurable).
+        # If the persona has no default_language, the model mirrors the user's spoken language.
+        self.resolved_language = persona.get("default_language")
         self.enable_transcription = self.voice_persona.get("enable_transcription", True)
 
         # Resolve custom instructions (expand preset IDs)
