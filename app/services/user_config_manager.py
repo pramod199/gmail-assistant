@@ -26,7 +26,7 @@ class UserConfigManager:
                 "voice_name": None,
                 "custom_instructions": None,
                 "persona_name": None,
-                "language": "English",
+                "language": None,
                 "enable_transcription": True,
             },
             "created_at": int(time.time()),
