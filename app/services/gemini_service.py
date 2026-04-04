@@ -256,8 +256,6 @@ Keep responses concise but informative. Ask for clarification when needed."""
             response_count = 0
             async for response in session.receive():
                 response_count += 1
-                logger.debug(f"Processing response #{response_count}")
-                logger.debug(f"Raw Gemini response: {response}")
                 
                 response_data = {
                     "type": "response",
@@ -318,11 +316,14 @@ Keep responses concise but informative. Ask for clarification when needed."""
                                 function_result = await function_handler(response_data["function_call"])
                                 logger.debug(f"Function result: {function_result}")
                                 logger.debug(f"Function result type: {type(function_result)}")
-                                
+
                                 # Ensure function result is a dict
                                 if not isinstance(function_result, dict):
                                     function_result = {"result": str(function_result)}
-                                
+
+                                # Always attach result to response data for the client
+                                response_data["function_result"] = function_result
+
                                 # Send function result back to Gemini using send_tool_response
                                 logger.debug(f"Attempting to send function response...")
                                 try:
@@ -338,10 +339,10 @@ Keep responses concise but informative. Ask for clarification when needed."""
                                 except Exception as e:
                                     logger.error(f"Failed to send function response: {e}")
                                     logger.error(f"Continuing without sending response...")
-                                
+
                             except Exception as e:
                                 logger.error(f"Function execution error: {e}")
-                                # Don't try to send error response for now - just continue
+                                response_data["function_result"] = {"error": str(e)}
                         
                         yield response_data
                 

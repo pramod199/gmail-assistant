@@ -393,10 +393,13 @@ class VoiceWebSocketHandler:
                         })
 
                     elif response_type == "function_call":
-                        # Function call was executed, send status
+                        # Function call was executed, send full details
+                        fc = response.get("function_call", {})
                         await send_json_safe(websocket, {
                             "type": "function_executed",
-                            "function_name": response.get("function_call", {}).get("name"),
+                            "function_name": fc.get("name"),
+                            "args": fc.get("parameters", {}),
+                            "result": response.get("function_result"),
                             "message": "Gmail operation completed"
                         })
 

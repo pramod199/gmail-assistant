@@ -3,12 +3,12 @@
 import type { Phase, SessionState } from "@/lib/use-voice-session";
 
 const phaseLabels: Record<Phase, string> = {
-  idle: "Not signed in",
+  idle: "Offline",
   authenticating: "Signing in...",
   authenticated: "Signed in",
   connecting: "Connecting...",
   connected: "Connected",
-  voice_active: "Listening",
+  voice_active: "Live",
 };
 
 const phaseDot: Record<Phase, string> = {
@@ -28,15 +28,14 @@ export function StatusIndicator({
   sessionState: SessionState;
 }) {
   return (
-    <div className="flex items-center gap-4 text-sm">
-      <div className="flex items-center gap-2">
-        <div className={`w-2 h-2 rounded-full ${phaseDot[phase]}`} />
-        <span className="text-gray-300">{phaseLabels[phase]}</span>
+    <div className="flex items-center gap-2 text-sm text-gray-400">
+      <div className="flex items-center gap-1.5">
+        <div className={`w-1.5 h-1.5 rounded-full ${phaseDot[phase]}`} />
+        <span>{phaseLabels[phase]}</span>
       </div>
       {sessionState.totalMessages !== undefined && (
-        <span className="text-gray-500">
-          Message {(sessionState.currentIndex ?? 0) + 1}/
-          {sessionState.totalMessages}
+        <span className="text-gray-600">
+          {(sessionState.currentIndex ?? 0) + 1}/{sessionState.totalMessages}
           {sessionState.hasMore ? "+" : ""}
         </span>
       )}
