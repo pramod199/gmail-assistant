@@ -36,6 +36,16 @@ class GmailFunctionHandler:
                 return await self.mark_message(**parameters)
             elif function_name == "draft_email":
                 return await self.draft_email(**parameters)
+            elif function_name == "get_attachments":
+                return await self.get_attachments(**parameters)
+            elif function_name == "read_thread":
+                return await self.read_thread(**parameters)
+            elif function_name == "list_labels":
+                return await self.list_labels(**parameters)
+            elif function_name == "modify_labels":
+                return await self.modify_labels(**parameters)
+            elif function_name == "search_contacts":
+                return await self.search_contacts(**parameters)
             else:
                 return {"error": f"Unknown function: {function_name}"}
         
@@ -249,25 +259,196 @@ class GmailFunctionHandler:
             if not message_id:
                 return {"error": "No current message to mark"}
         
-        # Execute action
-        success = False
-        action_msg = ""
-        
-        if action == "read":
-            success = await self.gmail.mark_as_read([message_id])
-            action_msg = "marked as read"
-        elif action == "unread":
-            # TODO: Implement mark as unread in gmail_service
-            action_msg = "mark as unread not implemented yet"
-        elif action in ["star", "unstar", "archive", "delete"]:
-            action_msg = f"{action} not implemented yet"
+        # Execute action via Gmail API label modifications / trash
+        action_map = {
+            "read":    {"remove": ["UNREAD"], "msg": "marked as read"},
+            "unread":  {"add": ["UNREAD"], "msg": "marked as unread"},
+            "star":    {"add": ["STARRED"], "msg": "starred"},
+            "unstar":  {"remove": ["STARRED"], "msg": "unstarred"},
+            "archive": {"remove": ["INBOX"], "msg": "archived"},
+        }
+
+        if action == "trash" or action == "delete":
+            success = await self.gmail.trash_message(message_id)
+            action_msg = "moved to trash"
+        elif action in action_map:
+            cfg = action_map[action]
+            success = await self.gmail.modify_message(
+                message_id,
+                add_labels=cfg.get("add", []),
+                remove_labels=cfg.get("remove", []),
+            )
+            action_msg = cfg["msg"]
         else:
             return {"error": f"Invalid action: {action}"}
-        
+
         if success:
             return {"response": f"Message {action_msg} successfully."}
         else:
             return {"error": f"Failed to {action} message."}
+
+    async def get_attachments(
+        self, action: str, attachment_index: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """List or describe attachments on the current message."""
+        logger.debug(f"get_attachments called: action={action}, attachment_index={attachment_index}")
+        session_state = await self._ensure_session_initialized()
+        if not session_state:
+            return {"error": "Failed to initialize message session"}
+
+        message_id = session_state.get("current_message_id")
+        if not message_id:
+            return {"error": "No current message"}
+
+        message = await self._get_message_with_cache(message_id)
+        if not message:
+            return {"error": "Current message not found"}
+
+        attachments = message.get("attachments", []) or []
+
+        if action == "list":
+            if not attachments:
+                return {"response": "This message has no attachments."}
+            summary_lines = []
+            for i, att in enumerate(attachments):
+                size_kb = max(1, att.get("size", 0) // 1024)
+                summary_lines.append(
+                    f"{i + 1}. {att.get('filename')} ({att.get('mime_type')}, {size_kb} KB)"
+                )
+            return {
+                "response": f"This message has {len(attachments)} attachment(s): "
+                            + "; ".join(summary_lines),
+                "attachments": attachments,
+            }
+
+        if action == "describe":
+            if not attachments:
+                return {"response": "This message has no attachments to describe."}
+            if attachment_index is None or not (0 <= attachment_index < len(attachments)):
+                return {"error": f"Invalid attachment index. Message has {len(attachments)} attachment(s)."}
+
+            att = attachments[attachment_index]
+            data = await self.gmail.get_attachment(message_id, att["attachment_id"])
+            if not data:
+                return {"error": f"Failed to download attachment '{att.get('filename')}'"}
+
+            summary = await self.gmail.analyze_attachment(
+                data, att.get("mime_type", "application/octet-stream"), att.get("filename", "file")
+            )
+            return {
+                "response": f"Attachment '{att.get('filename')}': {summary}",
+                "filename": att.get("filename"),
+            }
+
+        return {"error": f"Invalid action: {action}"}
+
+    async def read_thread(self) -> Dict[str, Any]:
+        """Read the full conversation thread for the current message."""
+        logger.debug("read_thread called")
+        session_state = await self._ensure_session_initialized()
+        if not session_state:
+            return {"error": "Failed to initialize message session"}
+
+        message_id = session_state.get("current_message_id")
+        if not message_id:
+            return {"error": "No current message"}
+
+        message = await self._get_message_with_cache(message_id)
+        if not message or not message.get("thread_id"):
+            return {"error": "Cannot determine thread for current message"}
+
+        thread = await self.gmail.get_thread(message["thread_id"])
+        if not thread:
+            return {"error": "Failed to fetch thread"}
+
+        messages = thread.get("messages", [])
+        if not messages:
+            return {"response": "This thread is empty."}
+
+        formatted_parts = [f"This conversation has {len(messages)} message(s)."]
+        for i, msg in enumerate(messages, start=1):
+            sender = msg.get("sender", "Unknown sender")
+            natural_date = self.format_date_for_voice(msg.get("date", ""))
+            body = msg.get("body") or msg.get("snippet", "")
+            body_preview = self.format_content_for_voice(body)
+            formatted_parts.append(
+                f"Message {i}, from {sender}, {natural_date}: {body_preview}"
+            )
+
+        return {
+            "response": " ".join(formatted_parts),
+            "thread_id": thread.get("id"),
+            "message_count": len(messages),
+        }
+
+    async def list_labels(self) -> Dict[str, Any]:
+        """List user's Gmail labels."""
+        logger.debug("list_labels called")
+        labels = await self.gmail.list_labels()
+        if not labels:
+            return {"response": "No labels found."}
+
+        user_labels = [lbl for lbl in labels if lbl.get("type") == "user"]
+        system_labels = [lbl for lbl in labels if lbl.get("type") == "system"]
+
+        names = [lbl["name"] for lbl in user_labels]
+        if names:
+            response = f"You have {len(names)} custom labels: " + ", ".join(names) + "."
+        else:
+            response = "You have no custom labels."
+
+        return {
+            "response": response,
+            "user_labels": [lbl["name"] for lbl in user_labels],
+            "system_labels": [lbl["name"] for lbl in system_labels],
+        }
+
+    async def modify_labels(self, action: str, label_name: str) -> Dict[str, Any]:
+        """Add or remove a label on the current message by label name."""
+        logger.debug(f"modify_labels called: action={action}, label_name={label_name}")
+        session_state = await self._ensure_session_initialized()
+        if not session_state:
+            return {"error": "Failed to initialize message session"}
+
+        message_id = session_state.get("current_message_id")
+        if not message_id:
+            return {"error": "No current message"}
+
+        labels = await self.gmail.list_labels()
+        matched = next(
+            (lbl for lbl in labels if lbl["name"].lower() == label_name.lower()),
+            None,
+        )
+        if not matched:
+            return {"error": f"Label '{label_name}' not found. Use list_labels to see available labels."}
+
+        if action == "add":
+            success = await self.gmail.modify_message(message_id, add_labels=[matched["id"]])
+            verb = "added"
+        elif action == "remove":
+            success = await self.gmail.modify_message(message_id, remove_labels=[matched["id"]])
+            verb = "removed"
+        else:
+            return {"error": f"Invalid action: {action}"}
+
+        if success:
+            return {"response": f"Label '{matched['name']}' {verb} successfully."}
+        return {"error": f"Failed to {action} label '{matched['name']}'."}
+
+    async def search_contacts(self, name_query: str) -> Dict[str, Any]:
+        """Search recent senders for a matching name/email."""
+        logger.debug(f"search_contacts called: name_query={name_query}")
+        contacts = await self.gmail.search_senders(name_query)
+        if not contacts:
+            return {"response": f"I couldn't find anyone matching '{name_query}' in your recent emails."}
+
+        items = [f"{c.get('name') or c['email']} at {c['email']}" for c in contacts[:5]]
+        if len(contacts) == 1:
+            response = f"I found {items[0]}."
+        else:
+            response = f"I found {len(contacts)} matches: " + "; ".join(items) + "."
+
+        return {"response": response, "contacts": contacts}
 
     async def draft_email(self, action: str, **kwargs) -> Dict[str, Any]:
         """Handle email draft operations"""

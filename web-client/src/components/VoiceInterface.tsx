@@ -1,15 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   Phase,
   SessionState,
   ConversationEvent,
 } from "@/lib/use-voice-session";
 import type { LogEntry } from "@/lib/logger";
+import { getVoicePersona, type VoicePersonaResponse } from "@/lib/session-api";
 import { StatusIndicator } from "./StatusIndicator";
 import { LogPanel } from "./LogPanel";
 import { ConversationPanel } from "./ConversationPanel";
+import { SettingsPanel } from "./SettingsPanel";
+import { SubtitleOverlay } from "./SubtitleOverlay";
 
 interface VoiceInterfaceProps {
   phase: Phase;
@@ -21,12 +24,15 @@ interface VoiceInterfaceProps {
   speakerVolume: number;
   audioOut: number;
   audioIn: number;
+  subtitle: string;
+  userSubtitle: string;
   logs: LogEntry[];
   onConnect: () => void;
   onDisconnect: () => void;
   onStartVoice: () => void;
   onStopVoice: () => void;
   onClearLogs: () => void;
+  token: string;
 }
 
 function formatBytes(bytes: number): string {
@@ -225,15 +231,32 @@ export function VoiceInterface({
   speakerVolume,
   audioOut,
   audioIn,
+  subtitle,
+  userSubtitle,
   logs,
   onConnect,
   onDisconnect,
   onStartVoice,
   onStopVoice,
   onClearLogs,
+  token,
 }: VoiceInterfaceProps) {
   const [logsOpen, setLogsOpen] = useState(false);
+  const [persona, setPersona] = useState<VoicePersonaResponse | null>(null);
   const isConnected = phase === "connected" || phase === "voice_active";
+  const isSetup = phase === "authenticated" || phase === "connecting";
+
+  // Load current persona when we have a token
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    getVoicePersona(token)
+      .then((p) => !cancelled && setPersona(p))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
   const isVoiceActive = phase === "voice_active";
 
   // State label text
@@ -289,21 +312,94 @@ export function VoiceInterface({
         </div>
       )}
 
-      {/* Audio control strip — prominent center position */}
-      <AudioControlStrip
-        phase={phase}
-        micVolume={micVolume}
-        isSpeaking={isSpeaking}
-        speakerVolume={speakerVolume}
-        audioOut={audioOut}
-        audioIn={audioIn}
-        onStartVoice={onStartVoice}
-        onStopVoice={onStopVoice}
-        onConnect={onConnect}
-      />
+      {/* Setup screen (pre-connect) vs active session */}
+      {isSetup ? (
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-2xl mx-auto p-6 space-y-5">
+            <div className="text-center space-y-1">
+              <h2 className="text-xl font-semibold text-gray-100">
+                Configure your voice assistant
+              </h2>
+              <p className="text-sm text-gray-500">
+                Pick a persona and voice, then connect to start talking.
+              </p>
+            </div>
+            {token && (
+              <SettingsPanel token={token} onSaved={setPersona} />
+            )}
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={onConnect}
+                disabled={phase === "connecting"}
+                className="px-10 py-3 text-base bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors shadow-lg shadow-blue-600/20"
+              >
+                {phase === "connecting" ? "Connecting..." : "Connect"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Active session settings — read-only display */}
+          {persona && (
+            <div className="flex items-center justify-center gap-2 px-4 py-2 border-b border-gray-800/40 bg-gray-950/30 text-xs shrink-0 flex-wrap">
+              <span
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-950/40 border border-blue-900/50 text-blue-200"
+                title={persona.persona_description}
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3 text-blue-400">
+                  <path d="M10 8a3 3 0 100-6 3 3 0 000 6zM5 18a5 5 0 1110 0H5z" />
+                </svg>
+                <span className="font-medium">{persona.persona_name}</span>
+              </span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-gray-300">
+                <span className="text-gray-500">Voice</span>
+                <span className="font-medium">{persona.voice_name}</span>
+              </span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-gray-300">
+                <span className="text-gray-500">Lang</span>
+                <span className="font-medium">{persona.language}</span>
+              </span>
+              {persona.custom_instructions && (
+                <span
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-gray-300 max-w-[260px] truncate"
+                  title={persona.custom_instructions}
+                >
+                  <span className="text-gray-500">Preset</span>
+                  <span className="font-medium truncate">{persona.custom_instructions}</span>
+                </span>
+              )}
+              <span
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border ${
+                  persona.enable_transcription
+                    ? "bg-emerald-950/30 border-emerald-900/50 text-emerald-300"
+                    : "bg-gray-900/60 border-gray-800 text-gray-500"
+                }`}
+              >
+                <span>Transcription</span>
+                <span className="font-medium">
+                  {persona.enable_transcription ? "On" : "Off"}
+                </span>
+              </span>
+            </div>
+          )}
+
+          {/* Audio control strip — prominent center position */}
+          <AudioControlStrip
+            phase={phase}
+            micVolume={micVolume}
+            isSpeaking={isSpeaking}
+            speakerVolume={speakerVolume}
+            audioOut={audioOut}
+            audioIn={audioIn}
+            onStartVoice={onStartVoice}
+            onStopVoice={onStopVoice}
+            onConnect={onConnect}
+          />
 
       {/* Main content — responsive split */}
-      <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+      <div className="relative flex-1 flex flex-col lg:flex-row min-h-0">
+        <SubtitleOverlay subtitle={subtitle} userSubtitle={userSubtitle} />
         {/* Conversation — takes most space */}
         <div className="flex-1 flex flex-col min-h-0 lg:min-w-0">
           <ConversationPanel events={conversation} />
@@ -330,6 +426,8 @@ export function VoiceInterface({
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

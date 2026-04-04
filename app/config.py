@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     # Gemini API Configuration
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-pro"
+    GEMINI_FLASH_LITE_MODEL: str = "gemini-3.1-flash-lite-preview"
     GEMINI_TEMPERATURE: int = 1
     GEMINI_MAX_TOKENS: int = 1000
     GEMINI_HTTP_TIMEOUT: int = 300000  # HTTP timeout in milliseconds (default: 5 minutes)

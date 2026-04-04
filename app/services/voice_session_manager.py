@@ -47,6 +47,7 @@ class VoiceSession:
         self.response_task: Optional[asyncio.Task] = None
         self.response_monitor_active: bool = False
         self.websocket: Optional[Any] = None
+        self.voice_persona: Dict[str, Any] = {}  # Loaded from UserConfigManager at connect time
 
     @property
     def id(self) -> str:
