@@ -21,6 +21,14 @@ class UserConfigManager:
         return {
             "auto_mark_as_read": True,    # Mark emails as read when reading them
             "auto_send_drafts": False,    # Send drafts immediately vs save to Gmail
+            "voice_persona": {
+                "persona_id": "default",
+                "voice_name": None,
+                "custom_instructions": None,
+                "persona_name": None,
+                "language": "English",
+                "enable_transcription": True,
+            },
             "created_at": int(time.time()),
             "updated_at": int(time.time())
         }

@@ -12,6 +12,7 @@ from app.services.gmail_service import GmailService
 from app.services.session_service import SessionManager
 from app.services.voice_session_manager import voice_session_manager
 from app.services.gmail_oauth_service import UserCredentialStore
+from app.services.user_config_manager import UserConfigManager
 from .websocket_helpers import safe_websocket_close, is_websocket_connected, send_json_safe, send_bytes_safe
 
 
@@ -25,6 +26,7 @@ class VoiceWebSocketHandler:
         self.session_manager = SessionManager()
         self.credential_store = UserCredentialStore()
         self.retry_handler = ConnectionRetryHandler(max_attempts=3)
+        self.config_manager = UserConfigManager()
     
     async def connect(self, websocket: WebSocket, firebase_user_id: str, session_id: str):
         """Establish WebSocket connection for pre-authenticated Firebase user with session validation"""
@@ -90,14 +92,19 @@ class VoiceWebSocketHandler:
             gmail_service = self._create_gmail_service(gmail_credentials, user_id)
             function_handler = GmailFunctionHandler(gmail_service, self.session_manager, user_id)
 
-            # Initialize Gemini Live client
-            gemini_client = GeminiLiveClient()
+            # Load voice persona preferences
+            user_config = await self.config_manager.get_config(user_id)
+            voice_persona = user_config.get("voice_persona", {})
+
+            # Initialize Gemini Live client with persona config
+            gemini_client = GeminiLiveClient(voice_persona=voice_persona)
 
             # Store services in voice session object
             voice_session.websocket = websocket
             voice_session.gmail_service = gmail_service
             voice_session.function_handler = function_handler
             voice_session.gemini_client = gemini_client
+            voice_session.voice_persona = voice_persona
 
             # Send connection success
             await send_json_safe(websocket, {
@@ -317,7 +324,7 @@ class VoiceWebSocketHandler:
             resumption_handle = await self.session_manager.get_gemini_resumption_token(user_id)
 
             # Create new Gemini session (with resumption if available)
-            gemini_client = GeminiLiveClient()
+            gemini_client = GeminiLiveClient(voice_persona=voice_session.voice_persona)
             gemini_session_context = await gemini_client.create_session(
                 function_handler=voice_session.function_handler.handle_function_call,
                 resumption_handle=resumption_handle
@@ -409,6 +416,23 @@ class VoiceWebSocketHandler:
                         await send_json_safe(websocket, {
                             "type": "stop_audio",
                             "message": "User interrupted - clear audio queue"
+                        })
+
+                    elif response_type == "input_transcription":
+                        await send_json_safe(websocket, {
+                            "type": "input_transcription",
+                            "text": response.get("text")
+                        })
+
+                    elif response_type == "output_transcription":
+                        await send_json_safe(websocket, {
+                            "type": "output_transcription",
+                            "text": response.get("text")
+                        })
+
+                    elif response_type == "generation_complete":
+                        await send_json_safe(websocket, {
+                            "type": "generation_complete"
                         })
 
                     elif response_type == "session_resumption_update":

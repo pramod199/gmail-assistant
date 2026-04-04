@@ -16,6 +16,8 @@ export default function Home() {
     speakerVolume,
     audioOut,
     audioIn,
+    subtitle,
+    userSubtitle,
     logs,
     login,
     connect,
@@ -23,6 +25,7 @@ export default function Home() {
     stopVoice,
     disconnect,
     clearLogs,
+    getToken,
   } = useVoiceSession();
 
   if (phase === "idle" || phase === "authenticating") {
@@ -46,12 +49,15 @@ export default function Home() {
       speakerVolume={speakerVolume}
       audioOut={audioOut}
       audioIn={audioIn}
+      subtitle={subtitle}
+      userSubtitle={userSubtitle}
       logs={logs}
       onConnect={connect}
       onDisconnect={disconnect}
       onStartVoice={startVoice}
       onStopVoice={stopVoice}
       onClearLogs={clearLogs}
+      token={getToken()}
     />
   );
 }

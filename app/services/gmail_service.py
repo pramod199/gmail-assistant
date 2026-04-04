@@ -1,4 +1,5 @@
 from typing import Optional, Any, List, Dict
+import asyncio
 import base64
 import logging
 from email.message import EmailMessage
@@ -203,6 +204,168 @@ class GmailService:
             return None
     
     
+    async def modify_message(
+        self,
+        message_id: str,
+        add_labels: Optional[List[str]] = None,
+        remove_labels: Optional[List[str]] = None,
+    ) -> bool:
+        """Add and/or remove labels on a Gmail message."""
+        try:
+            service = self.get_service()
+            body = {
+                "addLabelIds": add_labels or [],
+                "removeLabelIds": remove_labels or [],
+            }
+            service.users().messages().modify(
+                userId="me", id=message_id, body=body
+            ).execute()
+            return True
+        except HttpError as error:
+            logger.error(f"Error modifying message {message_id}: {error}")
+            return False
+        except Exception as error:
+            logger.error(f"Unexpected error modifying message: {error}")
+            return False
+
+    async def trash_message(self, message_id: str) -> bool:
+        """Move a message to Trash."""
+        try:
+            service = self.get_service()
+            service.users().messages().trash(userId="me", id=message_id).execute()
+            return True
+        except HttpError as error:
+            logger.error(f"Error trashing message {message_id}: {error}")
+            return False
+        except Exception as error:
+            logger.error(f"Unexpected error trashing message: {error}")
+            return False
+
+    async def get_attachment(self, message_id: str, attachment_id: str) -> Optional[bytes]:
+        """Download an attachment's raw bytes from Gmail."""
+        try:
+            service = self.get_service()
+            result = service.users().messages().attachments().get(
+                userId="me", messageId=message_id, id=attachment_id
+            ).execute()
+            data = result.get("data", "")
+            if not data:
+                return None
+            return base64.urlsafe_b64decode(data)
+        except HttpError as error:
+            logger.error(f"Error fetching attachment {attachment_id}: {error}")
+            return None
+        except Exception as error:
+            logger.error(f"Unexpected error fetching attachment: {error}")
+            return None
+
+    async def get_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch an entire email thread and return parsed messages."""
+        try:
+            service = self.get_service()
+            thread = service.users().threads().get(
+                userId="me", id=thread_id, format="full"
+            ).execute()
+            messages = [self._parse_message(m) for m in thread.get("messages", [])]
+            return {
+                "id": thread.get("id"),
+                "history_id": thread.get("historyId"),
+                "messages": messages,
+            }
+        except HttpError as error:
+            logger.error(f"Error fetching thread {thread_id}: {error}")
+            return None
+        except Exception as error:
+            logger.error(f"Unexpected error fetching thread: {error}")
+            return None
+
+    async def list_labels(self) -> List[Dict[str, Any]]:
+        """List all Gmail labels for the user."""
+        try:
+            service = self.get_service()
+            result = service.users().labels().list(userId="me").execute()
+            labels = result.get("labels", [])
+            return [
+                {
+                    "id": lbl.get("id"),
+                    "name": lbl.get("name"),
+                    "type": lbl.get("type", "user"),
+                }
+                for lbl in labels
+            ]
+        except HttpError as error:
+            logger.error(f"Error listing labels: {error}")
+            return []
+        except Exception as error:
+            logger.error(f"Unexpected error listing labels: {error}")
+            return []
+
+    async def search_senders(self, name_query: str, max_results: int = 20) -> List[Dict[str, str]]:
+        """Search recent email history for unique senders matching a name/email query."""
+        try:
+            service = self.get_service()
+            list_result = service.users().messages().list(
+                userId="me", q=f"from:{name_query}", maxResults=max_results
+            ).execute()
+            message_ids = [m["id"] for m in list_result.get("messages", [])]
+
+            seen: Dict[str, str] = {}
+            for msg_id in message_ids:
+                meta = service.users().messages().get(
+                    userId="me", id=msg_id, format="metadata",
+                    metadataHeaders=["From"]
+                ).execute()
+                headers = meta.get("payload", {}).get("headers", [])
+                for h in headers:
+                    if h.get("name", "").lower() == "from":
+                        from_value = h.get("value", "")
+                        name, email_addr = self._parse_from_header(from_value)
+                        if email_addr and email_addr not in seen:
+                            seen[email_addr] = name or email_addr
+                        break
+
+            return [{"name": name, "email": email_addr} for email_addr, name in seen.items()]
+        except HttpError as error:
+            logger.error(f"Error searching senders for '{name_query}': {error}")
+            return []
+        except Exception as error:
+            logger.error(f"Unexpected error searching senders: {error}")
+            return []
+
+    def _parse_from_header(self, from_value: str) -> tuple[str, str]:
+        """Parse a From header into (name, email)."""
+        import email.utils as eu
+        name, addr = eu.parseaddr(from_value)
+        return name, addr
+
+    async def analyze_attachment(
+        self, attachment_data: bytes, mime_type: str, filename: str
+    ) -> str:
+        """Send attachment bytes to Gemini Flash-Lite for AI content analysis."""
+        try:
+            from google import genai
+            from google.genai import types
+            from app.config import settings
+
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            prompt = (
+                f"Describe the contents of the file '{filename}' concisely for a voice "
+                f"assistant to read aloud. Focus on key information, data points, and "
+                f"overall structure. Keep the summary to a few sentences."
+            )
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=settings.GEMINI_FLASH_LITE_MODEL,
+                contents=[
+                    types.Part.from_bytes(data=attachment_data, mime_type=mime_type),
+                    prompt,
+                ],
+            )
+            return response.text or "Could not extract content from attachment."
+        except Exception as error:
+            logger.error(f"Error analyzing attachment '{filename}': {error}")
+            return f"I wasn't able to analyze the attachment '{filename}'."
+
     def _parse_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         headers = message.get("payload", {}).get("headers", [])
         
@@ -234,7 +397,8 @@ class GmailService:
                 in_reply_to = value
         
         body = self._extract_body(message.get("payload", {}))
-        
+        attachments = self._extract_attachments(message.get("payload", {}))
+
         return {
             "id": message.get("id"),
             "thread_id": message.get("threadId"),
@@ -247,8 +411,29 @@ class GmailService:
             "labels": message.get("labelIds", []),
             "message_id": message_id,
             "references": references,
-            "in_reply_to": in_reply_to
+            "in_reply_to": in_reply_to,
+            "attachments": attachments,
         }
+
+    def _extract_attachments(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Recursively scan message payload for attachment parts (parts with non-empty filename)."""
+        attachments: List[Dict[str, Any]] = []
+
+        def walk(part: Dict[str, Any]):
+            filename = part.get("filename") or ""
+            body = part.get("body", {}) or {}
+            if filename and body.get("attachmentId"):
+                attachments.append({
+                    "filename": filename,
+                    "mime_type": part.get("mimeType", ""),
+                    "size": body.get("size", 0),
+                    "attachment_id": body.get("attachmentId"),
+                })
+            for sub in part.get("parts", []) or []:
+                walk(sub)
+
+        walk(payload)
+        return attachments
     
     def _extract_body(self, payload: Dict[str, Any]) -> str:
         import re

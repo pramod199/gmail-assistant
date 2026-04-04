@@ -107,6 +107,14 @@ export function ConversationPanel({
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-3">
       {events.map((event, i) => {
+        if (event.type === "user_transcription") {
+          return (
+            <div key={i} className="text-base text-gray-400 italic leading-relaxed pl-4 border-l-2 border-gray-700">
+              {event.text}
+            </div>
+          );
+        }
+
         if (event.type === "assistant") {
           return (
             <div key={i} className="text-base text-gray-200 leading-relaxed">
