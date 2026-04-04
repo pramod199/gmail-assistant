@@ -10,6 +10,12 @@ export default function Home() {
     authError,
     gmailAuthUrl,
     sessionState,
+    conversation,
+    micVolume,
+    isSpeaking,
+    speakerVolume,
+    audioOut,
+    audioIn,
     logs,
     login,
     connect,
@@ -34,6 +40,12 @@ export default function Home() {
       phase={phase}
       gmailAuthUrl={gmailAuthUrl}
       sessionState={sessionState}
+      conversation={conversation}
+      micVolume={micVolume}
+      isSpeaking={isSpeaking}
+      speakerVolume={speakerVolume}
+      audioOut={audioOut}
+      audioIn={audioIn}
       logs={logs}
       onConnect={connect}
       onDisconnect={disconnect}
