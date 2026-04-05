@@ -505,7 +505,6 @@ class GeminiLiveClient:
                     if hasattr(server_content, 'output_transcription') and server_content.output_transcription:
                         text = getattr(server_content.output_transcription, 'text', None)
                         if text:
-                            logger.debug(f"Output transcription: {text}")
                             yield {"type": "output_transcription", "text": text, "data": None, "function_call": None, "audio_data": None}
 
                     # Check for audio data
@@ -513,7 +512,6 @@ class GeminiLiveClient:
                         model_turn = server_content.model_turn
                         for part in model_turn.parts:
                             if hasattr(part, 'inline_data') and part.inline_data:
-                                logger.debug(f"Found audio data")
                                 response_data["type"] = "audio"
                                 response_data["audio_data"] = part.inline_data.data
                                 yield response_data
@@ -610,6 +608,13 @@ class GeminiLiveClient:
             logger.info("Response processing cancelled")
             raise
         except Exception as e:
+            # Detect normal websocket closure (code 1000) and treat it as a graceful end,
+            # not an error requiring retries.
+            err_str = str(e)
+            code = getattr(e, 'code', None)
+            if code == 1000 or err_str.startswith("1000 ") or "ConnectionClosedOK" in err_str:
+                logger.info(f"Gemini Live session closed normally (code 1000): {err_str}")
+                return
             logger.error(f"Error in process_responses: {e}")
             raise
         finally:

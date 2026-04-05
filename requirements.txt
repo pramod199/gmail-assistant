@@ -6,6 +6,7 @@ typing-extensions
 redis[asyncio]
 fastapi
 uvicorn
+watchfiles
 websockets
 firebase-admin
 python-multipart

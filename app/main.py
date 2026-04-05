@@ -102,5 +102,6 @@ if __name__ == "__main__":
         host=settings.API_HOST,
         port=settings.API_PORT,
         reload=settings.ENVIRONMENT == "development",
+        reload_dirs=["app"],
         log_level="info"
     )

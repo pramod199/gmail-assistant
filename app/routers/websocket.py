@@ -257,7 +257,7 @@ class VoiceWebSocketHandler:
         """Continuously monitor and restart response processing tasks"""
         logger.info(f"Starting continuous response monitoring for user {user_id}")
 
-        while voice_session.active and is_websocket_connected(websocket):
+        while voice_session.active and voice_session.response_monitor_active and is_websocket_connected(websocket):
             try:
                 # Create new processing task
                 task = asyncio.create_task(self._process_gemini_responses(websocket, user_id, voice_session))
@@ -383,8 +383,8 @@ class VoiceWebSocketHandler:
                     break
                 
                 response_type = response.get("type")
-                logger.info(f"Received Gemini response type: {response_type} for user {user_id}")
-                
+
+
                 try:
                     if response_type == "audio":
                         # Stream audio response back to client as raw bytes
@@ -495,6 +495,21 @@ class VoiceWebSocketHandler:
     async def _end_voice_session(self, websocket: WebSocket, user_id: str, voice_session):
         """End the current voice session"""
         try:
+            # Stop the continuous response monitor so it won't try to start a new
+            # processing task on a torn-down Gemini session.
+            voice_session.response_monitor_active = False
+
+            # Cancel the in-flight response processing task (if any) so the monitor
+            # loop exits via CancelledError rather than seeing a None session.
+            response_task = voice_session.response_task
+            if response_task and not response_task.done():
+                response_task.cancel()
+                try:
+                    await response_task
+                except asyncio.CancelledError:
+                    pass
+            voice_session.response_task = None
+
             session_context = voice_session.session_context
             gemini_session = voice_session.gemini_session
 

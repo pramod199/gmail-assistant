@@ -16,7 +16,6 @@ PREBUILT_PERSONAS: Dict[str, dict] = {
     "default": {
         "name": "Assistant",
         "default_voice": "Aoede",
-        "default_language": "Hindi",
         "description": "Standard helpful assistant — clear, efficient, no frills",
         "style_prompt": (
             "You are a helpful, concise Gmail voice assistant. "
