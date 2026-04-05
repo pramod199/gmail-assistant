@@ -1,18 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   Phase,
   SessionState,
   ConversationEvent,
 } from "@/lib/use-voice-session";
 import type { LogEntry } from "@/lib/logger";
-import { getVoicePersona, type VoicePersonaResponse } from "@/lib/session-api";
-import { StatusIndicator } from "./StatusIndicator";
+import {
+  getVoicePersona,
+  getInstructionPresets,
+  type VoicePersonaResponse,
+  type InstructionPresetInfo,
+} from "@/lib/session-api";
+import { StatusPill } from "./StatusPill";
 import { LogPanel } from "./LogPanel";
 import { ConversationPanel } from "./ConversationPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { SubtitleOverlay } from "./SubtitleOverlay";
+import { AudioConsole } from "./AudioConsole";
+import { ConfigChipRow } from "./ConfigChipRow";
+import { Button } from "./ui/Button";
 
 interface VoiceInterfaceProps {
   phase: Phase;
@@ -35,191 +43,51 @@ interface VoiceInterfaceProps {
   token: string;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function MicButton({
-  isActive,
-  isSpeaking,
-  micVolume,
-  onClick,
-}: {
-  isActive: boolean;
-  isSpeaking: boolean;
-  micVolume: number;
-  onClick: () => void;
-}) {
-  const ringScale = isActive ? 1 + micVolume * 0.5 : 1;
-  const ringOpacity = isActive ? 0.3 + micVolume * 0.5 : 0;
-
+function BrandMark() {
   return (
-    <div className="relative flex items-center justify-center">
+    <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
       <div
-        className="absolute w-20 h-20 rounded-full transition-transform duration-75"
+        className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-[var(--r-md)] flex items-center justify-center shrink-0 shadow-[var(--elev-1)]"
         style={{
-          transform: `scale(${ringScale})`,
-          opacity: ringOpacity,
-          background: isActive
-            ? "radial-gradient(circle, rgba(239,68,68,0.4) 0%, transparent 70%)"
-            : "none",
+          background: "var(--grad-primary)",
+          boxShadow: "var(--glow-accent)",
         }}
-      />
-      {isSpeaking && !isActive && (
-        <div className="absolute w-20 h-20 rounded-full animate-ping opacity-20 bg-blue-500" />
-      )}
-      <button
-        onClick={onClick}
-        className={`relative z-10 w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-lg ${
-          isActive
-            ? "bg-red-600 hover:bg-red-700 shadow-red-600/40"
-            : "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/30"
-        }`}
-        title={isActive ? "Stop listening" : "Start listening"}
       >
-        {isActive ? (
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
-          </svg>
-        ) : (
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-          </svg>
-        )}
-      </button>
+        <div
+          className="absolute inset-[2px] rounded-[8px] pointer-events-none"
+          style={{
+            background:
+              "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.4) 0%, transparent 55%)",
+          }}
+        />
+        <svg
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          className="w-4 h-4 sm:w-5 sm:h-5 text-white relative z-10"
+        >
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+        </svg>
+      </div>
+      <div className="flex flex-col leading-tight min-w-0">
+        <span className="text-[15px] sm:text-[17px] font-semibold tracking-tight text-grad-primary truncate">
+          Gmail Assistant
+        </span>
+        <span className="t-micro text-[var(--text-4)] hidden sm:inline">Voice</span>
+      </div>
     </div>
   );
 }
 
-function AudioControlStrip({
-  phase,
-  micVolume,
-  isSpeaking,
-  speakerVolume,
-  audioOut,
-  audioIn,
-  onStartVoice,
-  onStopVoice,
-  onConnect,
-}: {
-  phase: Phase;
-  micVolume: number;
-  isSpeaking: boolean;
-  speakerVolume: number;
-  audioOut: number;
-  audioIn: number;
-  onStartVoice: () => void;
-  onStopVoice: () => void;
-  onConnect: () => void;
-}) {
-  const isConnected = phase === "connected" || phase === "voice_active";
-  const isVoiceActive = phase === "voice_active";
-
-  if (!isConnected) {
-    return (
-      <div className="flex items-center justify-center py-5 border-b border-gray-800/40 bg-gray-950/50">
-        <button
-          onClick={onConnect}
-          disabled={phase === "connecting"}
-          className="px-8 py-3 text-base bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
-        >
-          {phase === "connecting" ? "Connecting..." : "Connect"}
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center justify-center gap-6 py-4 px-4 border-b border-gray-800/40 bg-gray-950/50">
-      {/* Mic input side */}
-      <div className="flex items-center gap-3 flex-1 justify-end">
-        <div className="text-right">
-          <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Mic Input</div>
-          <div className="text-sm font-mono text-gray-400">{formatBytes(audioOut)}</div>
-        </div>
-        {/* Volume bar - mic */}
-        <div className="w-24 flex flex-col gap-1">
-          <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-green-500 rounded-full transition-all duration-75"
-              style={{ width: `${isVoiceActive ? Math.max(micVolume * 100, 2) : 0}%` }}
-            />
-          </div>
-          <div className="flex justify-between">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <div
-                key={i}
-                className={`w-1 h-1 rounded-full transition-colors ${
-                  isVoiceActive && micVolume > i * 0.2
-                    ? "bg-green-400"
-                    : "bg-gray-700"
-                }`}
-              />
-            ))}
-          </div>
-        </div>
-        {/* Up arrow */}
-        <svg
-          className={`w-5 h-5 transition-colors ${
-            isVoiceActive && micVolume > 0.05 ? "text-green-400" : "text-gray-700"
-          }`}
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" />
-        </svg>
-      </div>
-
-      {/* Center mic button */}
-      <MicButton
-        isActive={isVoiceActive}
-        isSpeaking={isSpeaking}
-        micVolume={micVolume}
-        onClick={isVoiceActive ? onStopVoice : onStartVoice}
-      />
-
-      {/* Speaker output side */}
-      <div className="flex items-center gap-3 flex-1">
-        {/* Down arrow */}
-        <svg
-          className={`w-5 h-5 transition-colors ${
-            isSpeaking ? "text-blue-400" : "text-gray-700"
-          }`}
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z" />
-        </svg>
-        {/* Volume bar - speaker */}
-        <div className="w-24 flex flex-col gap-1">
-          <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 rounded-full transition-all duration-75"
-              style={{ width: `${isSpeaking ? Math.max(speakerVolume * 100, 2) : 0}%` }}
-            />
-          </div>
-          <div className="flex justify-between">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <div
-                key={i}
-                className={`w-1 h-1 rounded-full transition-colors ${
-                  isSpeaking && speakerVolume > i * 0.2 ? "bg-blue-400" : "bg-gray-700"
-                }`}
-              />
-            ))}
-          </div>
-        </div>
-        <div className="text-left">
-          <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Speaker</div>
-          <div className="text-sm font-mono text-gray-400">{formatBytes(audioIn)}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
+const settingsIcon = (
+  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+    <path
+      fillRule="evenodd"
+      d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z"
+      clipRule="evenodd"
+    />
+  </svg>
+);
 
 export function VoiceInterface({
   phase,
@@ -241,147 +109,250 @@ export function VoiceInterface({
   onClearLogs,
   token,
 }: VoiceInterfaceProps) {
-  const [logsOpen, setLogsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [persona, setPersona] = useState<VoicePersonaResponse | null>(null);
+  const [presets, setPresets] = useState<InstructionPresetInfo[]>([]);
+
   const isConnected = phase === "connected" || phase === "voice_active";
   const isSetup = phase === "authenticated" || phase === "connecting";
 
-  // Load current persona when we have a token
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
     getVoicePersona(token)
       .then((p) => !cancelled && setPersona(p))
       .catch(() => {});
+    getInstructionPresets()
+      .then((pr) => !cancelled && setPresets(pr))
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [token]);
-  const isVoiceActive = phase === "voice_active";
 
-  // State label text
-  let stateText = "";
-  if (isVoiceActive && isSpeaking) stateText = "Assistant speaking...";
-  else if (isVoiceActive) stateText = "Listening...";
-  else if (phase === "connected") stateText = "Press mic to start";
+  const presetLabel = useMemo(() => {
+    if (!persona?.custom_instructions) return null;
+    const match = presets.find(
+      (p) => p.instructions === persona.custom_instructions
+    );
+    return match?.label ?? "Custom";
+  }, [persona, presets]);
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-b from-gray-950 via-gray-950 to-gray-900 text-white">
-      {/* Header — compact */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800/60 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-red-500" />
-          <h1 className="text-base font-semibold tracking-tight">
-            Gmail Voice Assistant
-          </h1>
+    <div className="flex flex-col h-screen app-bg text-[var(--text-1)]">
+      {/* Header */}
+      <header className="relative flex items-center gap-2 sm:gap-3 px-3 sm:px-5 h-14 sm:h-16 border-b border-[var(--border-subtle)] bg-[var(--surface-1)]/50 backdrop-blur-sm shrink-0">
+        {/* Gradient accent line at bottom */}
+        <div
+          className="absolute inset-x-0 bottom-0 h-px pointer-events-none"
+          style={{ background: "var(--grad-header-underline)" }}
+        />
+        <BrandMark />
+        <div className="flex-1 min-w-0 flex justify-center sm:justify-end">
+          <StatusPill
+            phase={phase}
+            sessionState={sessionState}
+            isSpeaking={isSpeaking}
+          />
         </div>
-        <div className="flex items-center gap-3">
-          {stateText && (
-            <span className={`text-sm ${
-              isSpeaking ? "text-blue-400 animate-pulse" :
-              isVoiceActive ? "text-red-400" : "text-gray-500"
-            }`}>
-              {stateText}
-            </span>
-          )}
-          <StatusIndicator phase={phase} sessionState={sessionState} />
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {isConnected && (
-            <button
-              onClick={onDisconnect}
-              className="px-3 py-1 text-xs text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-700 rounded transition-colors"
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Settings"
+              className="h-9 w-9 sm:h-10 sm:w-10"
             >
-              Disconnect
-            </button>
+              {settingsIcon}
+            </Button>
+          )}
+          {isConnected && (
+            <>
+              <Button
+                variant="secondary"
+                size="icon"
+                onClick={onDisconnect}
+                aria-label="Disconnect"
+                className="sm:hidden h-9 w-9"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                  <path d="M10 2a1 1 0 011 1v7a1 1 0 11-2 0V3a1 1 0 011-1z" />
+                  <path d="M5.05 5.05a1 1 0 010 1.414 5 5 0 107.071 0 1 1 0 111.414-1.414 7 7 0 11-9.9 0 1 1 0 011.415 0z" />
+                </svg>
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onDisconnect}
+                className="hidden sm:inline-flex"
+              >
+                Disconnect
+              </Button>
+            </>
           )}
         </div>
-      </div>
+      </header>
 
       {/* Gmail Auth Banner */}
       {gmailAuthUrl && (
-        <div className="mx-4 mt-2 p-3 bg-yellow-900/30 border border-yellow-700/50 rounded-lg text-sm shrink-0">
-          <span className="text-yellow-300">Gmail auth required: </span>
+        <div className="mx-3 sm:mx-4 mt-3 px-3 py-2.5 rounded-[var(--r-md)] bg-[var(--warn-soft)] border border-[color:var(--warn)]/30 flex items-center gap-2.5 shrink-0">
+          <svg
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="w-4 h-4 text-[var(--warn)] shrink-0"
+          >
+            <path
+              fillRule="evenodd"
+              d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM10 13a1 1 0 110 2 1 1 0 010-2zm-1-4a1 1 0 112 0v2a1 1 0 11-2 0V9z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span className="t-body text-[var(--text-1)] flex-1">
+            Gmail authorization required.
+          </span>
           <a
             href={gmailAuthUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-400 underline hover:text-blue-300"
+            className="t-body font-medium text-[var(--warn)] hover:underline focus-ring rounded"
           >
-            Authorize
+            Authorize →
           </a>
-          <span className="text-yellow-300"> — then reconnect.</span>
         </div>
       )}
 
-      {/* Setup screen (pre-connect) vs active session */}
+      {/* Setup screen vs active session */}
       {isSetup ? (
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl mx-auto p-6 space-y-5">
-            <div className="text-center space-y-1">
-              <h2 className="text-xl font-semibold text-gray-100">
+        <div className="flex-1 overflow-y-auto scroll-thin">
+          <div className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8">
+            <div className="text-center space-y-2.5 sm:space-y-3 mb-6 sm:mb-8">
+              <div
+                className="inline-flex items-center gap-2 px-3 py-1 rounded-[var(--r-full)] border border-[color:var(--accent)]/30 bg-[var(--accent-soft)] t-micro text-[var(--accent-hover)]"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
+                Ready to connect
+              </div>
+              <h2 className="text-[26px] sm:text-[32px] lg:text-[38px] leading-tight font-semibold tracking-tight text-grad-primary px-2">
                 Configure your voice assistant
               </h2>
-              <p className="text-sm text-gray-500">
+              <p className="t-body sm:t-body-lg text-[var(--text-3)] px-2">
                 Pick a persona and voice, then connect to start talking.
               </p>
             </div>
-            {token && (
-              <SettingsPanel token={token} onSaved={setPersona} />
-            )}
-            <div className="flex justify-center pt-2">
+
+            <div className="grid lg:grid-cols-[1fr_360px] gap-4 sm:gap-5 items-start">
+              {token && (
+                <SettingsPanel token={token} onSaved={setPersona} />
+              )}
+
+              {/* Preview card */}
+              <aside
+                className="relative p-5 bg-[var(--surface-1)] border border-[var(--border-subtle)] rounded-[var(--r-lg)] shadow-[var(--elev-1)] space-y-4 overflow-hidden"
+              >
+                <div
+                  className="absolute inset-x-0 top-0 h-px pointer-events-none"
+                  style={{ background: "var(--grad-primary)" }}
+                />
+                <div
+                  className="absolute -top-20 -right-20 w-40 h-40 rounded-full pointer-events-none"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(168,85,247,0.15) 0%, transparent 70%)",
+                  }}
+                />
+                <h3 className="t-label text-grad-primary relative">Preview</h3>
+                {persona ? (
+                  <>
+                    <div className="space-y-1">
+                      <div className="t-micro text-[var(--text-3)]">
+                        Persona
+                      </div>
+                      <div className="t-body-lg text-[var(--text-1)]">
+                        {persona.persona_name}
+                      </div>
+                      {persona.persona_description && (
+                        <div className="t-body text-[var(--text-3)]">
+                          {persona.persona_description}
+                        </div>
+                      )}
+                    </div>
+                    <div className="h-px bg-[var(--border-subtle)]" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="t-micro text-[var(--text-3)] mb-1">
+                          Voice
+                        </div>
+                        <div className="t-body text-[var(--text-1)]">
+                          {persona.voice_name}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="t-micro text-[var(--text-3)] mb-1">
+                          Transcript
+                        </div>
+                        <div className="t-body text-[var(--text-1)]">
+                          {persona.enable_transcription ? "On" : "Off"}
+                        </div>
+                      </div>
+                    </div>
+                    {presetLabel && (
+                      <div>
+                        <div className="t-micro text-[var(--text-3)] mb-1">
+                          Preset
+                        </div>
+                        <div className="t-body text-[var(--text-1)]">
+                          {presetLabel}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="t-body text-[var(--text-3)]">Loading…</div>
+                )}
+              </aside>
+            </div>
+
+            <div className="flex justify-center pt-6 sm:pt-8">
               <button
                 onClick={onConnect}
                 disabled={phase === "connecting"}
-                className="px-10 py-3 text-base bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors shadow-lg shadow-blue-600/20"
+                className="relative h-12 sm:h-14 w-full sm:w-auto sm:min-w-[240px] px-8 rounded-[var(--r-md)] font-semibold text-[16px] sm:text-[17px] text-white focus-ring transition-transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100 btn-grad shadow-[var(--glow-accent)] overflow-hidden"
               >
-                {phase === "connecting" ? "Connecting..." : "Connect"}
+                <div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{
+                    background:
+                      "radial-gradient(circle at 30% 0%, rgba(255,255,255,0.22) 0%, transparent 50%)",
+                  }}
+                />
+                <span className="relative flex items-center justify-center gap-2">
+                  {phase === "connecting" ? (
+                    <>
+                      <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4 animate-spin">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="50 50" opacity="0.3" />
+                        <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                      </svg>
+                      Connecting…
+                    </>
+                  ) : (
+                    <>
+                      Connect
+                      <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                        <path fillRule="evenodd" d="M10.3 5.3a1 1 0 011.4 0l4 4a1 1 0 010 1.4l-4 4a1 1 0 01-1.4-1.4L12.58 11H4a1 1 0 110-2h8.58L10.3 6.7a1 1 0 010-1.4z" clipRule="evenodd" />
+                      </svg>
+                    </>
+                  )}
+                </span>
               </button>
             </div>
           </div>
         </div>
       ) : (
         <>
-          {/* Active session settings — read-only display */}
-          {persona && (
-            <div className="flex items-center justify-center gap-2 px-4 py-2 border-b border-gray-800/40 bg-gray-950/30 text-xs shrink-0 flex-wrap">
-              <span
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-950/40 border border-blue-900/50 text-blue-200"
-                title={persona.persona_description}
-              >
-                <svg viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3 text-blue-400">
-                  <path d="M10 8a3 3 0 100-6 3 3 0 000 6zM5 18a5 5 0 1110 0H5z" />
-                </svg>
-                <span className="font-medium">{persona.persona_name}</span>
-              </span>
-              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-gray-300">
-                <span className="text-gray-500">Voice</span>
-                <span className="font-medium">{persona.voice_name}</span>
-              </span>
-              {persona.custom_instructions && (
-                <span
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-gray-300 max-w-[260px] truncate"
-                  title={persona.custom_instructions}
-                >
-                  <span className="text-gray-500">Preset</span>
-                  <span className="font-medium truncate">{persona.custom_instructions}</span>
-                </span>
-              )}
-              <span
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border ${
-                  persona.enable_transcription
-                    ? "bg-emerald-950/30 border-emerald-900/50 text-emerald-300"
-                    : "bg-gray-900/60 border-gray-800 text-gray-500"
-                }`}
-              >
-                <span>Transcription</span>
-                <span className="font-medium">
-                  {persona.enable_transcription ? "On" : "Off"}
-                </span>
-              </span>
-            </div>
-          )}
+          {persona && <ConfigChipRow persona={persona} presetLabel={presetLabel} onEdit={() => setSettingsOpen(true)} />}
 
-          {/* Audio control strip — prominent center position */}
-          <AudioControlStrip
+          <AudioConsole
             phase={phase}
             micVolume={micVolume}
             isSpeaking={isSpeaking}
@@ -390,39 +361,44 @@ export function VoiceInterface({
             audioIn={audioIn}
             onStartVoice={onStartVoice}
             onStopVoice={onStopVoice}
-            onConnect={onConnect}
           />
 
-      {/* Main content — responsive split */}
-      <div className="relative flex-1 flex flex-col lg:flex-row min-h-0">
-        <SubtitleOverlay subtitle={subtitle} userSubtitle={userSubtitle} />
-        {/* Conversation — takes most space */}
-        <div className="flex-1 flex flex-col min-h-0 lg:min-w-0">
-          <ConversationPanel events={conversation} />
-        </div>
+          {/* Main content */}
+          <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+            <div className="relative flex-1 flex flex-col min-h-0 lg:min-w-0">
+              <ConversationPanel events={conversation} />
+              <SubtitleOverlay
+                subtitle={subtitle}
+                userSubtitle={userSubtitle}
+                accent={isSpeaking}
+              />
+            </div>
 
-        {/* Logs sidebar on desktop, collapsible on mobile */}
-        <div className="lg:w-[420px] lg:border-l border-t lg:border-t-0 border-gray-800/60 flex flex-col shrink-0">
-          <button
-            onClick={() => setLogsOpen(!logsOpen)}
-            className="lg:hidden w-full flex items-center justify-between px-3 py-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+            {/* Logs sidebar — desktop only */}
+            <div className="hidden lg:flex lg:w-[360px] lg:border-l border-[var(--border-subtle)] flex-col shrink-0">
+              <LogPanel logs={logs} onClear={onClearLogs} />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Settings modal (mid-session) — bottom-sheet on mobile, centered on desktop */}
+      {settingsOpen && token && (
+        <div
+          className="fixed inset-0 z-30 flex items-end sm:items-center justify-center sm:p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            className="w-full sm:max-w-md max-h-[88vh] sm:max-h-[90vh] overflow-y-auto scroll-thin"
+            onClick={(e) => e.stopPropagation()}
           >
-            <span>Logs ({logs.length})</span>
-            <svg
-              className={`w-3 h-3 transition-transform ${logsOpen ? "rotate-180" : ""}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-            </svg>
-          </button>
-          <div className={`${logsOpen ? "h-48" : "hidden"} lg:flex lg:flex-col lg:flex-1 lg:min-h-0`}>
-            <LogPanel logs={logs} onClear={onClearLogs} />
+            <SettingsPanel
+              token={token}
+              onClose={() => setSettingsOpen(false)}
+              onSaved={setPersona}
+            />
           </div>
         </div>
-      </div>
-        </>
       )}
     </div>
   );
