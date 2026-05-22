@@ -1,399 +1,183 @@
 # Gmail Voice Assistant
 
-A voice-first Gmail assistant that enables hands-free email management through natural language voice interactions using Gemini Live API with streaming audio processing, FastAPI backend, and multi-user support.
+A voice-first Gmail assistant built on Google's Gemini Live API. Talk naturally to read, navigate, summarize, and reply to email — hands-free. Designed for use cases like driving and CarPlay.
+
+The project is split into two services:
+
+- **`app/`** — FastAPI backend that streams audio to/from Gemini Live, handles Gmail API calls, and stores per-user sessions in Redis.
+- **`web-client/`** — Next.js web client for browser-based voice interaction and sign-in.
 
 ## Features
 
-🎙️ **Voice-First Interface**
-- Real-time streaming voice processing via WebSocket
-- Natural conversation with Gmail assistant
-- Audio isolation to prevent feedback loops
-- Multi-user support with session isolation
-
-📧 **Gmail Operations**
-- Read emails with natural voice commands
-- Navigate through messages (next, previous, first, last)
-- Smart message filtering and search
-- Mark messages as read, starred, archived
-- Create and send email drafts
-
-🧠 **AI-Powered**
-- Gemini Live API integration with function calling
-- Natural language understanding for complex queries
-- Voice-optimized response formatting
-- Smart pagination and session management
-
-🔐 **Secure & Scalable**
-- Firebase Authentication with Gmail OAuth
-- Redis-based session management
-- Multi-user isolation
-- Secure token management
+- Real-time streaming voice conversation (WebSocket + Gemini Live)
+- Natural-language Gmail commands: read, navigate, summarize, mark, archive, draft, send
+- Multi-user support with isolated sessions
+- Firebase Authentication for app access + Google OAuth for Gmail access
+- Redis-backed sessions and credential storage with automatic token refresh
 
 ## Architecture
 
 ```
-Voice Client → WebSocket → FastAPI → Gemini Live API → Gmail API
-                    ↓
-               Redis Session Store
+Browser / Voice Client ──WebSocket──▶ FastAPI ──▶ Gemini Live API
+                                         │
+                                         ├──▶ Gmail API
+                                         └──▶ Redis (sessions, credentials)
 ```
 
-### Components
-- **FastAPI Backend**: WebSocket + REST endpoints with Firebase auth
-- **Gemini Live API**: Streaming voice processing with function calling
-- **Gmail API**: Unified email operations (read, modify, drafts, search)
-- **Redis**: Session management and user state
-- **PyAudio Client**: Test client with audio isolation
+## Prerequisites
 
-## Quick Start
-
-### Prerequisites
 - Python 3.11+
-- Redis server
-- Google Cloud Project (for Gmail API)
-- Firebase Project (for authentication)
+- Node.js 20+ (for the web client)
+- Redis 7+ (local or via Docker)
+- A Google Cloud project with Gmail API enabled
+- A Firebase project
+- A Gemini API key
 
-### 1. Install Dependencies
+## Credentials Setup
+
+You need three sets of credentials. Each one goes in a specific place.
+
+### 1. Gemini API Key
+
+1. Go to https://aistudio.google.com/apikey
+2. Click **Create API key** and copy it.
+3. Add to `.env` as `GEMINI_API_KEY=...`.
+
+### 2. Google Cloud OAuth (Gmail access)
+
+1. Open https://console.cloud.google.com and create (or pick) a project.
+2. Enable the Gmail API: **APIs & Services → Library → "Gmail API" → Enable**.
+3. Configure the OAuth consent screen:
+   - **APIs & Services → OAuth consent screen**
+   - User type: **External** (or Internal if you're on Workspace)
+   - Add the scope `https://www.googleapis.com/auth/gmail.modify`
+   - Add your email as a **Test user** while the app is in testing mode
+4. Create the OAuth client:
+   - **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+   - Application type: **Web application**
+   - Authorized redirect URIs: `http://localhost:8000/api/auth/gmail/callback`
+5. Download the JSON and save it as `credentials.json` in the project root.
+
+### 3. Firebase (user authentication)
+
+1. Open https://console.firebase.google.com and create a project.
+2. **Build → Authentication → Get started** and enable the **Email/Password** sign-in provider.
+3. Get the **Web API key**:
+   - **Project settings (gear icon) → General → Your apps → Web app**
+   - Register a web app if you haven't, copy `apiKey`.
+   - Add to `.env` as `FIREBASE_WEB_API_KEY=...` and to `web-client/.env.local` as `NEXT_PUBLIC_FIREBASE_API_KEY=...`.
+4. Get the **service account key** (server-side admin SDK):
+   - **Project settings → Service accounts → Generate new private key**
+   - Save the downloaded JSON as `firebase-service-account.json` in the project root.
+
+> ⚠️ `credentials.json`, `firebase-service-account.json`, and `.env` are all in `.gitignore`. Never commit them.
+
+### 4. Configure environment variables
 
 ```bash
+cp .env.example .env
+# edit .env and fill in your real values
+```
+
+For the web client:
+
+```bash
+cd web-client
+cat > .env.local <<EOF
+NEXT_PUBLIC_FIREBASE_API_KEY=your_firebase_web_api_key
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api
+NEXT_PUBLIC_WS_BASE_URL=ws://localhost:8000/api/voice
+EOF
+```
+
+## Running the Backend
+
+### Option A — Docker (recommended)
+
+Starts the FastAPI server and Redis together:
+
+```bash
+docker-compose up --build
+```
+
+API will be available on `http://localhost:7552` (mapped from container port 8000).
+
+### Option B — Local
+
+```bash
+# 1. Start Redis (in another terminal or via Docker)
+docker run -p 6379:6379 redis:7-alpine
+
+# 2. Install Python dependencies
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+
+# 3. Run the server
+python -m app.main
+# or, with reload:
+# uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 2. Start Redis Server
+Health check: `curl http://localhost:8000/`
+Interactive API docs: http://localhost:8000/docs
+
+## Running the Web Client
+
+In a separate terminal:
 
 ```bash
-# Option A: Using Docker (Recommended)
-docker-compose up redis -d
-
-# Option B: Local Redis
-redis-server
+cd web-client
+npm install
+npm run dev
 ```
 
-### 3. Setup Firebase & Gmail API
+Open http://localhost:3000.
 
-**Firebase Setup:**
-1. Create Firebase project at https://console.firebase.google.com
-2. Generate service account key
-3. Save as `firebase-service-account.json`
+1. Sign in with the Firebase email/password account you created.
+2. The app will prompt you to authorize Gmail on first use — complete the Google OAuth flow.
+3. Hit the mic and start talking.
 
-**Gmail API Setup:**
-1. Create Google Cloud project
-2. Enable Gmail API
-3. Create OAuth 2.0 credentials
-4. Save as `credentials.json`
+## Voice Commands
 
-### 4. Generate Test Token
+Some examples of what you can say:
 
-```bash
-python create_test_token.py
-```
-
-This will create a Firebase token for testing.
-
-### 5. Start Server
-
-```bash
-python app.py
-```
-
-Server will run on `http://localhost:8000`
-
-### 6. Test Voice Interface
-
-```bash
-python src/clients/pyaudio_client.py
-```
-
-Enter your Firebase token and start speaking!
-
-## Usage Examples
-
-### Voice Commands
-
-**Reading Emails:**
 - "Read my unread emails"
-- "Read messages from John"  
-- "Show me important emails from today"
-- "Read the latest message about the meeting"
+- "Next message" / "Previous message"
+- "Summarize this email"
+- "Mark this as read" / "Star this"
+- "Reply saying I'll be there by 5"
+- "Find emails from Alice about the launch"
 
-**Navigation:**
-- "Next message"
-- "Previous message" 
-- "Go to first message"
-- "Read full message"
-
-**Message Actions:**
-- "Mark this as read"
-- "Summarize this message"
-- "Star this message"
-
-**Drafting:**
-- "Draft a reply saying I'll be there"
-- "Compose email to john@example.com"
-- "Send the draft"
-
-### REST API Endpoints
-
-**Base URL:** `http://localhost:8000`
-
-**Authentication:**
-All endpoints require Firebase token:
-```
-Authorization: Bearer <firebase_id_token>
-```
-
-**Gmail Endpoints:**
-```
-GET  /api/gmail/messages                    # Get messages
-GET  /api/gmail/messages/{message_id}       # Get specific message  
-POST /api/gmail/messages/{id}/mark-read     # Mark as read
-POST /api/gmail/process                     # Natural language processing
-```
-
-**WebSocket Endpoint:**
-```
-WS   /api/voice/voice?token=<firebase_token> # Voice streaming
-```
-
-**Message Flow:**
-```json
-// Client -> Server (audio chunk)
-{
-    "type": "audio_chunk",
-    "data": "base64_encoded_audio",
-    "audio_format": {
-        "sample_rate": 16000,
-        "channels": 1,
-        "mime_type": "audio/pcm;rate=16000"
-    }
-}
-
-// Server -> Client (audio response)
-{
-    "type": "audio_response", 
-    "data": "base64_encoded_audio",
-    "session_state": {
-        "current_index": 0,
-        "total_messages": 5,
-        "has_more": false
-    }
-}
-```
-
-## Development
-
-### Project Structure
+## Project Layout
 
 ```
 gmail-assistant/
-├── src/
-│   ├── api/                     # FastAPI application
-│   │   ├── controllers/         # REST & WebSocket controllers
-│   │   ├── middleware/          # Firebase auth middleware
-│   │   └── websocket/           # Voice WebSocket handler
-│   ├── core/
-│   │   ├── auth/                # Firebase + Gmail OAuth
-│   │   ├── gmail_client/        # Gmail API integration  
-│   │   ├── voice/               # Gemini Live API + function calling
-│   │   └── session/             # Redis session management
-│   ├── clients/
-│   │   └── pyaudio_client.py    # Test client
-│   └── config/                  # Configuration
-├── live_audio_example/          # Gemini Live API examples
-├── create_test_token.py         # Token generation utility
-├── app.py                       # FastAPI server entry point
-└── requirements.txt             # Dependencies
+├── app/                  # FastAPI backend
+│   ├── main.py           # ASGI entrypoint
+│   ├── config.py         # Pydantic settings
+│   ├── auth.py           # Firebase + Gmail OAuth glue
+│   ├── api/              # Router aggregation
+│   ├── routers/          # auth, gmail, voice, websocket, health
+│   ├── services/         # gemini, gmail, redis, session, drafts
+│   ├── models/           # Internal domain models
+│   ├── schemas/          # Pydantic API contracts
+│   └── utils/            # Logging, parsing helpers
+├── web-client/           # Next.js web client
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── .env.example
 ```
-
-### Key Technologies
-
-- **FastAPI**: Modern web framework with WebSocket support
-- **Gemini Live API**: Real-time voice processing with function calling
-- **Firebase Auth**: User authentication and session management  
-- **Gmail API**: Email operations with OAuth 2.0
-- **Redis**: Session state and user data storage
-- **PyAudio**: Audio recording/playback for test client
-
-### Environment Variables
-
-Create `.env` file:
-```env
-GEMINI_API_KEY=your_gemini_api_key
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_DB=0
-FIREBASE_SERVICE_ACCOUNT_PATH=firebase-service-account.json
-GMAIL_CREDENTIALS_FILE=credentials.json
-```
-
-### Multi-User Architecture
-
-Each user gets isolated:
-- **WebSocket connection** with separate authentication
-- **Gmail credentials** and API access  
-- **Session state** in Redis (navigation, drafts)
-- **Gemini Live session** for voice processing
-
-**Redis Data Structure:**
-```redis
-# Single hash per data type for all users
-user_tokens = {
-  "firebase_uid_1": {"gmail_access_token": "...", "gmail_refresh_token": "..."},
-  "firebase_uid_2": {"gmail_access_token": "...", "gmail_refresh_token": "..."}
-}
-
-user_sessions = {
-  "firebase_uid_1": {"current_message_id": "...", "message_queue": [...]},  
-  "firebase_uid_2": {"current_message_id": "...", "message_queue": [...]}
-}
-```
-
-## Testing
-
-### Local Testing - Complete Walkthrough
-
-**Prerequisites Check:**
-```bash
-# 1. Verify Python version
-python --version  # Should be 3.11+
-
-# 2. Check Redis is running
-redis-cli ping     # Should return PONG
-
-# 3. Verify required files exist
-ls firebase-service-account.json credentials.json
-```
-
-**Step 1: Install Dependencies**
-```bash
-pip install -r requirements.txt
-```
-
-**Step 2: Generate Test Firebase Token**
-```bash
-python create_test_token.py
-```
-Save the generated token - you'll need it for testing.
-
-**Step 3: Start FastAPI Server** 
-```bash
-python app.py
-```
-Server should start on `http://localhost:8000`. Verify with:
-```bash
-curl http://localhost:8000/health
-```
-
-**Step 4: Authorize Gmail Access**
-```bash
-# Get your Firebase token from Step 2, then:
-curl -H "Authorization: Bearer YOUR_FIREBASE_TOKEN" \
-     http://localhost:8000/api/auth/gmail/status
-```
-If `is_authorized: false`, visit the returned `auth_url` in browser to complete OAuth.
-
-**Step 5: Test Voice Interface**
-```bash
-# In a new terminal:
-python src/clients/pyaudio_client.py
-```
-- Enter your Firebase token when prompted
-- Wait for "Connected to voice assistant!"
-- Start speaking: "Read my unread emails"
-
-### Voice Testing Flow
-
-1. **Generate token**: `python create_test_token.py`
-2. **Start server**: `python app.py`
-3. **Start client**: `python src/clients/pyaudio_client.py`
-4. **Speak naturally**: "Read my unread emails"
-5. **Navigate**: "Next message", "Mark as read"
-
-### REST API Testing
-
-Use Postman collection: `Gmail_Assistant_API.postman_collection.json`
-
-Or curl:
-```bash
-# Get messages
-curl -H "Authorization: Bearer $FIREBASE_TOKEN" \
-     http://localhost:8000/api/gmail/messages
-
-# Process natural language
-curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"query": "show me unread emails from john"}' \
-     http://localhost:8000/api/gmail/process
-```
-
-## Deployment
-
-### Docker Deployment
-
-```bash
-# Build and run
-docker-compose up --build
-
-# Production with Redis
-docker-compose -f docker-compose.prod.yml up -d
-```
-
-### Environment Setup
-
-- **Development**: Local Redis, Firebase emulator
-- **Production**: Redis Cloud, Firebase production project
-
-## API Documentation
-
-Once server is running, visit:
-- **Interactive API Docs**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
 
 ## Troubleshooting
 
-**Common Issues:**
-
-1. **Firebase Token Invalid**
-   - Regenerate: `python create_test_token.py`
-   - Check `firebase-service-account.json` exists
-
-2. **Gmail Authorization Required**  
-   - Visit `/api/auth/gmail/status` to get auth URL
-   - Complete OAuth flow in browser
-
-3. **Redis Connection Failed**
-   - Check Redis is running: `redis-cli ping`
-   - Verify connection settings in config
-
-4. **Audio Issues**
-   - Install PyAudio: `pip install pyaudio`  
-   - Check microphone permissions
-   - Try different audio devices
-
-5. **WebSocket Connection Failed**
-   - Check server is running on port 8000
-   - Verify Firebase token is valid
-   - Check browser/client WebSocket support
+- **`OAuth credentials file not found`** — `credentials.json` is missing from the project root.
+- **`NEXT_PUBLIC_FIREBASE_API_KEY is not set`** — fill it in `web-client/.env.local`.
+- **Gmail authorization keeps looping** — your OAuth client must be a **Web application** type with `http://localhost:8000/api/auth/gmail/callback` listed under Authorized redirect URIs.
+- **`access_denied` on the consent screen** — add your Google account as a Test user under OAuth consent screen settings.
+- **Redis connection refused** — make sure Redis is running on `localhost:6379`, or set `REDIS_HOST` / `REDIS_PORT` in `.env`.
 
 ## Contributing
 
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open Pull Request
-
-## License
-
-This project is licensed under the MIT License.
-
-## Support
-
-For issues and questions:
-1. Check troubleshooting section above
-2. Review API docs at `/docs` endpoint  
-3. Open GitHub issue with detailed description
-4. Include logs and error messages
-
----
-
-**Built with ❤️ using Gemini Live API, FastAPI, and modern Python**
+Pull requests welcome. For larger changes, please open an issue first to discuss what you'd like to change.

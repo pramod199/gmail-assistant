@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -120,8 +120,20 @@ dmypy.json
 #Pycharm IDE
 .idea
 
+# IDE / tooling
+.vscode
+.idea
 .claude
+
+# Project secrets — never commit these
 firebase-service-account.json
-my_test_token.txt
 credentials.json
-auto-translator-server
+*.token
+
+# macOS metadata
+.DS_Store
+._*
+
+# Logs
+*.log
+logs/
