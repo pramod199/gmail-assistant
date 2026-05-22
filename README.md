@@ -83,11 +83,8 @@ For the web client:
 
 ```bash
 cd web-client
-cat > .env.local <<EOF
-NEXT_PUBLIC_FIREBASE_API_KEY=your_firebase_web_api_key
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api
-NEXT_PUBLIC_WS_BASE_URL=ws://localhost:8000/api/voice
-EOF
+cp .env.example .env.local
+# edit .env.local and fill in NEXT_PUBLIC_FIREBASE_API_KEY
 ```
 
 ## Running the Backend
