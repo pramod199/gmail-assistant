@@ -1,0 +1,12 @@
+.git
+.env
+*.pyc
+__pycache__
+.venv
+venv
+*.egg-info
+firebase-service-account.json
+credentials.json
+docker-compose.yml
+Dockerfile
+.dockerignore

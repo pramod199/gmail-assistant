@@ -11,7 +11,6 @@ websockets
 firebase-admin
 python-multipart
 google-auth-oauthlib<1.2.0
-pyaudio
 numpy
 colorlog
 python-dotenv

@@ -1,73 +1,45 @@
-version: '3.8'
-
 networks:
-  gmail-assistant-network:
-    driver: bridge
+  gmail-assistant-net:
 
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: gmail-assistant-redis
+  app:
+    build: .
     ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-    restart: unless-stopped
-    networks:
-      - gmail-assistant-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  # api:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: gmail-assistant-api
-  #   ports:
-  #     - "8000:8000"
-  #   environment:
-  #     - REDIS_HOST=redis
-  #     - REDIS_PORT=6379
-  #     - REDIS_DB=0
-  #     - API_HOST=0.0.0.0
-  #     - API_PORT=8000
-  #   volumes:
-  #     - ./credentials.json:/app/credentials.json:ro
-  #     - ./firebase-service-account.json:/app/firebase-service-account.json:ro
-  #     - ./.env:/app/.env:ro
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #   restart: unless-stopped
-  #   networks:
-  #     - gmail-assistant-network
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-
-  redis-insight:
-    image: redislabs/redisinsight:latest
-    container_name: gmail-assistant-redis-insight
-    ports:
-      - "5540:5540"
-    volumes:
-      - redis_insight_data:/db
+      - "7552:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       redis:
         condition: service_healthy
+    volumes:
+      - ./firebase-service-account.json:/app/firebase-service-account.json:ro
+      - ./credentials.json:/app/credentials.json:ro
     restart: unless-stopped
     networks:
-      - gmail-assistant-network
-    command: sh -c "until nc -z redis 6379; do echo 'Waiting for Redis...'; sleep 2; done; echo 'Redis is ready!'; /usr/local/bin/docker-entrypoint.sh"
+      - gmail-assistant-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --save 60 1 --loglevel warning
+    volumes:
+      - gmail-assistant-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - gmail-assistant-net
 
 volumes:
-  redis_data:
-    driver: local
-  redis_insight_data:
-    driver: local
+  gmail-assistant-redis-data:
